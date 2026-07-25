@@ -341,6 +341,15 @@ tr:hover td{background:rgba(248,244,227,.55)}
   @page { size: 80mm auto; margin: 4mm; }
 }
 
+
+/* ── Bulk Select Bar ── */
+.bulk-bar{display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--ink);color:var(--p);border-radius:var(--r) var(--r) 0 0;flex-wrap:wrap;margin-bottom:0}
+.bulk-cnt{font-family:var(--en);font-weight:700;font-size:14px;color:var(--gold)}
+.bulk-bar .btn-sm{font-size:11px;padding:4px 9px}
+input[type=checkbox]{accent-color:var(--cr);width:15px;height:15px;cursor:pointer;vertical-align:middle}
+.sel-row td{background:rgba(117,22,29,.06)!important}
+.cb-th{width:36px;min-width:36px;text-align:center!important}
+.cb-td{width:36px;min-width:36px;text-align:center;padding:8px 6px!important}
 </style>
   <!-- Firebase SDK -->
   <script type="module">
@@ -777,6 +786,73 @@ function getAvgInterval(mid) {
   let total = 0;
   for (let i = 0; i < dates.length-1; i++) total += (dates[i] - dates[i+1]) / (1000*60*60*24);
   return Math.round(total / (dates.length-1));
+}
+
+
+// ── Bulk Select Helper ──
+function makeBulkBar(wrapId, getItems, deleteFn, afterFn) {
+  const wrap = ge(wrapId);
+  if (!wrap) return;
+
+  function getCheckedIds() {
+    return [...wrap.querySelectorAll('.row-cb:checked')].map(el => el.dataset.id);
+  }
+
+  function syncBar() {
+    const all = [...wrap.querySelectorAll('.row-cb')];
+    const checked = all.filter(el => el.checked);
+    const cntEl = wrap.querySelector('.bulk-cnt');
+    if (cntEl) cntEl.textContent = checked.length;
+    const delBtn = wrap.querySelector('.bulk-del-btn');
+    if (delBtn) delBtn.disabled = checked.length === 0;
+    const hdrCb = wrap.querySelector('.hdr-cb');
+    if (hdrCb) {
+      hdrCb.checked = all.length > 0 && checked.length === all.length;
+      hdrCb.indeterminate = checked.length > 0 && checked.length < all.length;
+    }
+    wrap.querySelectorAll('tbody tr').forEach(tr => {
+      const cb = tr.querySelector('.row-cb');
+      tr.classList.toggle('sel-row', !!(cb && cb.checked));
+    });
+  }
+
+  // Use event delegation on wrap - works even after innerHTML re-renders
+  wrap.addEventListener('change', function(e) {
+    if (e.target.classList.contains('hdr-cb')) {
+      wrap.querySelectorAll('.row-cb').forEach(cb => { cb.checked = e.target.checked; });
+      syncBar();
+    } else if (e.target.classList.contains('row-cb')) {
+      syncBar();
+    }
+  });
+
+  // select all
+  const selAllBtn = wrap.querySelector('.bulk-sel-all');
+  if (selAllBtn) selAllBtn.addEventListener('click', () => {
+    wrap.querySelectorAll('.row-cb').forEach(cb => { cb.checked = true; });
+    syncBar();
+  });
+  // deselect all
+  const deselBtn = wrap.querySelector('.bulk-desel-all');
+  if (deselBtn) deselBtn.addEventListener('click', () => {
+    wrap.querySelectorAll('.row-cb').forEach(cb => { cb.checked = false; });
+    syncBar();
+  });
+
+  // delete
+  const delBtn = wrap.querySelector('.bulk-del-btn');
+  if (delBtn) {
+    delBtn.addEventListener('click', () => {
+      const ids = getCheckedIds();
+      if (!ids.length) return;
+      if (!confirm('確定刪除選取的 ' + ids.length + ' 筆資料？')) return;
+      deleteFn(ids);
+      saveToLocal();
+      afterFn();
+    });
+  }
+
+  syncBar();
 }
 
 function exportCSV(filename, rows, headers) {
@@ -1383,10 +1459,19 @@ PF.inventory = function() {
         '<button class="tab' + (invTab==='low'?' on':'') + '" id="inv-low">低庫存</button>' +
       '</div>' +
     '</div>' +
-    '<div class="card"><div class="tw"><table>' +
-      '<thead><tr><th>商品名稱</th><th>闆娘</th><th>分類</th><th>售價</th><th>成本</th><th>庫存</th><th>狀態</th><th>操作</th></tr></thead>' +
-      '<tbody id="inv-tbody"></tbody>' +
-    '</table></div></div>';
+    '<div id="inv-wrap">' +
+      '<div class="bulk-bar">' +
+        '<input type="checkbox" class="hdr-cb" title="全選">' +
+        '<span style="font-size:13px">已選取 <span class="bulk-cnt">0</span> 件</span>' +
+        '<button class="btn btn-sm bulk-sel-all" style="background:rgba(255,255,255,.12);color:var(--p);border-color:rgba(255,255,255,.2)">全選</button>' +
+        '<button class="btn btn-sm bulk-desel-all" style="background:rgba(255,255,255,.12);color:var(--p);border-color:rgba(255,255,255,.2)">取消</button>' +
+        '<button class="btn btn-sm bulk-del-btn" disabled style="background:#b71c1c;color:#fff;border-color:#b71c1c;margin-left:auto">🗑 刪除選取</button>' +
+      '</div>' +
+      '<div class="card" style="border-top:none;border-radius:0 0 var(--r2) var(--r2)"><div class="tw"><table>' +
+        '<thead><tr><th class="cb-th" style="width:36px"></th><th style="min-width:130px">商品名稱</th><th>闆娘</th><th>分類</th><th>售價</th><th>成本</th><th>庫存</th><th>狀態</th><th>操作</th></tr></thead>' +
+        '<tbody id="inv-tbody"></tbody>' +
+      '</table></div></div>' +
+    '</div>';
   ge('pg').innerHTML = html;
 
   ge('inv-srch').addEventListener('input', function(){ invSearch=this.value; renderInvTable(); });
@@ -1408,7 +1493,8 @@ function renderInvTable() {
   tb.innerHTML = list.map(p => {
     const gr = Math.round(((p.price-p.cost)/p.price)*100);
     return '<tr class="' + (p.stock<=p.lowStock?'rw':'') + '">' +
-      '<td style="font-weight:600">' + p.name + (p.spec?'<div style="font-size:11px;color:var(--txt3);font-weight:400;margin-top:2px">'+p.spec+'</div>':'') + '</td>' +
+      '<td class="cb-td" style="width:36px;padding:8px 6px;text-align:center"><input type="checkbox" class="row-cb" data-id="' + p.id + '" onclick="event.stopPropagation()"></td>' +
+      '<td style="font-weight:600;min-width:120px;white-space:normal">' + p.name + (p.spec?'<div style="font-size:11px;color:var(--txt3);font-weight:400;margin-top:2px">'+p.spec+'</div>':'') + '</td>' +
       '<td>' + ownerTag(p.owner) + '</td>' +
       '<td><span class="bdg bi">' + p.cat + '</span></td>' +
       '<td class="tn">' + fm(p.price) + '</td>' +
@@ -1447,6 +1533,12 @@ function renderInvTable() {
     products = products.filter(p => p.id !== b.dataset.id);
     renderInvTable();
   }));
+  // bulk select
+  makeBulkBar('inv-wrap',
+    () => list.map(p => p.id),
+    ids => { products = products.filter(p => !ids.includes(p.id)); },
+    () => renderInvTable()
+  );
 }
 
 function openRefundModal({ title, desc, maxQty, unitPrice, onConfirm }) {
@@ -1810,11 +1902,20 @@ PF.orders = function() {
          (ordDateFrom||ordDateTo) ? '此日期範圍內沒有訂單' : '尚無訂單') +
       '</div>' : '') +
     '<div style="display:grid;grid-template-columns:' + (selOrder?'1fr 320px':'1fr') + ';gap:16px">' +
-      '<div class="card"><div class="tw"><table>' +
-        '<thead><tr><th>訂單編號</th><th>日期</th><th>客戶</th><th>金額</th><th>付款</th><th>狀態</th><th>操作</th></tr></thead>' +
+      '<div id="ord-wrap">' +
+      '<div class="bulk-bar">' +
+        '<input type="checkbox" class="hdr-cb" title="全選">' +
+        '<span style="font-size:13px">已選取 <span class="bulk-cnt">0</span> 筆</span>' +
+        '<button class="btn btn-sm bulk-sel-all" style="background:rgba(255,255,255,.12);color:var(--p);border-color:rgba(255,255,255,.2)">全選</button>' +
+        '<button class="btn btn-sm bulk-desel-all" style="background:rgba(255,255,255,.12);color:var(--p);border-color:rgba(255,255,255,.2)">取消</button>' +
+        '<button class="btn btn-sm bulk-del-btn" disabled style="background:#b71c1c;color:#fff;border-color:#b71c1c;margin-left:auto">🗑 刪除選取</button>' +
+      '</div>' +
+      '<div class="card" style="border-top:none;border-radius:0 0 var(--r2) var(--r2)"><div class="tw"><table>' +
+        '<thead><tr><th class="cb-th"></th><th>訂單編號</th><th>日期</th><th>客戶</th><th>金額</th><th>付款</th><th>狀態</th><th>操作</th></tr></thead>' +
         '<tbody>' +
           list.map(o =>
             '<tr data-oid="' + o.id + '" style="cursor:pointer">' +
+              '<td class="cb-td" onclick="event.stopPropagation()"><input type="checkbox" class="row-cb" data-id="' + o.id + '"></td>' +
               '<td class="tn" style="color:var(--cr);font-weight:700;font-size:12px">' + o.id + '</td>' +
               '<td>' + o.date + '</td>' +
               '<td style="font-weight:500">' + o.customer + (o.memberId?'<span class="bdg bb" style="margin-left:4px;font-size:10px">會員</span>':'') + (o.note?'<div style="font-size:10px;color:var(--txt3);margin-top:2px">📝 '+o.note+'</div>':'') + '</td>' +
@@ -1830,6 +1931,7 @@ PF.orders = function() {
           ).join('') +
         '</tbody>' +
       '</table></div></div>' +
+    '</div>' +
       detail +
     '</div>';
 
@@ -1968,6 +2070,15 @@ PF.orders = function() {
       }
     });
   }));
+  // bulk select
+  makeBulkBar('ord-wrap',
+    () => list.map(o => o.id),
+    ids => {
+      if (selOrder && ids.includes(selOrder.id)) selOrder = null;
+      orders = orders.filter(o => !ids.includes(o.id));
+    },
+    () => PF.orders()
+  );
 };
 
 // ══════════════════════════════════════
@@ -2308,10 +2419,19 @@ PF.members = function() {
         : '') +
       '</div>' +
     '</div>' +
-    '<div class="card"><div class="tw"><table>' +
-      '<thead><tr><th>編號</th><th>姓名</th><th>手機</th><th>等級</th><th>點數</th><th>總消費</th><th>距升等</th><th>備註</th><th>加入日期</th><th>操作</th></tr></thead>' +
-      '<tbody id="mbr-tbody"></tbody>' +
-    '</table></div></div>';
+    '<div id="mbr-wrap">' +
+      '<div class="bulk-bar">' +
+        '<input type="checkbox" class="hdr-cb" title="全選">' +
+        '<span style="font-size:13px">已選取 <span class="bulk-cnt">0</span> 名</span>' +
+        '<button class="btn btn-sm bulk-sel-all" style="background:rgba(255,255,255,.12);color:var(--p);border-color:rgba(255,255,255,.2)">全選</button>' +
+        '<button class="btn btn-sm bulk-desel-all" style="background:rgba(255,255,255,.12);color:var(--p);border-color:rgba(255,255,255,.2)">取消</button>' +
+        '<button class="btn btn-sm bulk-del-btn" disabled style="background:#b71c1c;color:#fff;border-color:#b71c1c;margin-left:auto">🗑 刪除選取</button>' +
+      '</div>' +
+      '<div class="card" style="border-top:none;border-radius:0 0 var(--r2) var(--r2)"><div class="tw"><table>' +
+        '<thead><tr><th class="cb-th"></th><th>姓名</th><th>手機</th><th>等級</th><th>點數</th><th>總消費</th><th>距升等</th><th>加入日期</th><th>操作</th></tr></thead>' +
+        '<tbody id="mbr-tbody"></tbody>' +
+      '</table></div></div>' +
+    '</div>';
 
   renderMbrTable();
 };
@@ -2325,17 +2445,18 @@ function renderMbrTable() {
     const avg = getAvgInterval(m.id);
     const overdue = avg !== null && getDaysSince(mOrds[0]?.date||today()) > avg*1.5;
     return '<tr>' +
-      '<td class="tn" style="color:var(--txt3);font-size:12px">' + m.id + '</td>' +
-      '<td style="font-weight:600">' + m.name + (overdue?'<span class="bdg br" style="margin-left:5px;font-size:9px">逾期</span>':'') + '</td>' +
-      '<td class="tn">' + m.phone + '</td>' +
+      '<td class="cb-td"><input type="checkbox" class="row-cb" data-id="' + m.id + '"></td>' +
+      
+      '<td style="font-weight:600;white-space:nowrap;min-width:80px">' + m.name + (overdue?'<span class="bdg br" style="margin-left:5px;font-size:9px">逾期</span>':'') + '</td>' +
+      '<td class="tn" style="white-space:nowrap">' + m.phone + '</td>' +
       '<td>' + tierBadge(m.tier) + '</td>' +
       '<td><span style="font-family:var(--en);font-weight:700;color:var(--gold)">' + m.points.toLocaleString() + '</span> <span style="font-size:10.5px;color:var(--txt3)">pt</span></td>' +
       '<td class="tn" style="font-weight:600">' + fm(m.totalSpend) + '</td>' +
-      '<td style="font-size:11px;color:var(--txt3)">' + (next?fm(next.minSpend-m.totalSpend):'已最高') + '</td>' +
-      '<td style="font-size:12px;color:var(--txt3);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (m.note||'') + '">' + (m.note||'—') + '</td>' +
-      '<td>' + m.joined + '</td>' +
-      '<td><div style="display:flex;gap:4px;flex-wrap:wrap">' +
-        '<button class="btn btn-o btn-sm mbr-hist" data-id="' + m.id + '">' + IC.history + ' 紀錄</button>' +
+      '<td style="font-size:11px;color:var(--txt3);white-space:nowrap">' + (next?fm(next.minSpend-m.totalSpend):'已最高') + '</td>' +
+      
+      '<td style="font-size:11px;white-space:nowrap;color:var(--txt3)">' + m.joined + '</td>' +
+      '<td style="white-space:nowrap"><div style="display:flex;gap:3px;flex-wrap:nowrap">' +
+        '<button class="btn btn-o btn-sm mbr-hist" data-id="' + m.id + '" title="消費紀錄">' + IC.history + '</button>' +
         '<button class="btn btn-o btn-sm mbr-edit" data-id="' + m.id + '">編輯</button>' +
         '<button class="btn btn-p btn-sm mbr-pos" data-id="' + m.id + '" title="帶入收銀台">' + IC.cart + '</button>' +
         '<button class="btn btn-d btn-sm mbr-del" data-id="' + m.id + '">' + IC.trash + '</button>' +
@@ -2356,6 +2477,13 @@ function renderMbrTable() {
     members = members.filter(m => m.id!==b.dataset.id);
     PF.members();
   }));
+
+  // bulk select
+  makeBulkBar('mbr-wrap',
+    () => members.map(m => m.id),
+    ids => { members = members.filter(m => !ids.includes(m.id)); },
+    () => PF.members()
+  );
 }
 
 function openMbrHistoryModal(mid) {
@@ -2899,8 +3027,16 @@ PF.employees = function() {
   ge('pg').innerHTML =
     '<div class="card" style="margin-bottom:16px">' +
       '<div class="card-hd"><span class="card-ttl">員工列表</span></div>' +
-      '<div class="tw"><table>' +
-        '<thead><tr><th>編號</th><th>姓名</th><th>職位</th><th>狀態</th><th>操作</th></tr></thead>' +
+      '<div id="emp-wrap">' +
+      '<div class="bulk-bar">' +
+        '<input type="checkbox" class="hdr-cb" title="全選">' +
+        '<span style="font-size:13px">已選取 <span class="bulk-cnt">0</span> 人</span>' +
+        '<button class="btn btn-sm bulk-sel-all" style="background:rgba(255,255,255,.12);color:var(--p);border-color:rgba(255,255,255,.2)">全選</button>' +
+        '<button class="btn btn-sm bulk-desel-all" style="background:rgba(255,255,255,.12);color:var(--p);border-color:rgba(255,255,255,.2)">取消</button>' +
+        '<button class="btn btn-sm bulk-del-btn" disabled style="background:#b71c1c;color:#fff;border-color:#b71c1c;margin-left:auto">🗑 刪除選取</button>' +
+      '</div>' +
+      '<div class="tw" style="border:1.5px solid var(--p3);border-top:none;border-radius:0 0 var(--r2) var(--r2);background:var(--w)"><table>' +
+        '<thead><tr><th class="cb-th"></th><th>編號</th><th>姓名</th><th>職位</th><th>狀態</th><th>操作</th></tr></thead>' +
         '<tbody id="emp-tbody"></tbody>' +
       '</table></div>' +
     '</div>' +
@@ -2923,6 +3059,7 @@ function renderEmpTable() {
   const tb = ge('emp-tbody'); if (!tb) return;
   tb.innerHTML = employees.map(e =>
     '<tr>' +
+      '<td class="cb-td"><input type="checkbox" class="row-cb" data-id="' + e.id + '"></td>' +
       '<td class="tn" style="color:var(--txt3);font-size:12px">' + e.id + '</td>' +
       '<td style="font-weight:600">' + e.name + '</td>' +
       '<td><span class="bdg bb">' + e.role + '</span></td>' +
@@ -2935,6 +3072,13 @@ function renderEmpTable() {
     employees = employees.filter(e => e.id !== b.dataset.id);
     renderEmpTable();
   }));
+
+  // bulk select
+  makeBulkBar('emp-wrap',
+    () => employees.map(e => e.id),
+    ids => { employees = employees.filter(e => !ids.includes(e.id)); },
+    () => renderEmpTable()
+  );
 }
 
 function openEmpModal() {
