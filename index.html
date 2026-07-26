@@ -53,7 +53,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--zh);color:var(--txt);fon
 #tb{height:var(--tbh);background:var(--w);border-bottom:1px solid var(--p3);display:flex;align-items:center;gap:10px;padding:0 22px;flex-shrink:0;box-shadow:0 1px 4px rgba(38,8,9,.06)}
 #hbg{width:36px;height:36px;border:none;background:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--txt2);border-radius:var(--r);transition:background .18s;flex-shrink:0}
 #hbg:hover{background:var(--p2)}
-#pg-title{font-family:var(--zh);font-weight:700;font-size:16px;color:var(--ink);flex:1;letter-spacing:.3px}
+#pg-title{font-family:var(--zh);font-weight:700;font-size:16px;color:var(--ink);flex:1;letter-spacing:.3px;line-height:1.2}
 #tb-act{display:flex;gap:8px;align-items:center}
 #pg{flex:1;overflow-y:auto;padding:22px 26px}
 /* ══ RESPONSIVE BREAKPOINTS ══ */
@@ -89,6 +89,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--zh);color:var(--txt);fon
   /* ── Layout ── */
   #pg{padding:10px 12px}
   #tb{padding:0 12px;height:var(--tbh)}
+  #pg-title{font-size:13px;line-height:1.2}
   #pg-title{font-size:14px;letter-spacing:0}
   #main{padding-bottom:58px}
   #pg{padding-bottom:70px}
@@ -108,8 +109,8 @@ html,body{height:100%;overflow:hidden;font-family:var(--zh);color:var(--txt);fon
     display:flex!important;flex-direction:column!important;
     height:auto!important;overflow:visible!important;gap:8px;
   }
-  .pos-l{overflow:visible!important}
-  .pos-g{grid-template-columns:repeat(2,1fr)!important;gap:6px}
+  .pos-l{overflow:visible!important;display:flex;flex-direction:column;gap:4px}
+  .pos-g{grid-template-columns:repeat(2,1fr)!important;gap:6px;min-height:60px}
 
   /* POS product card */
   .pc{padding:8px 6px}
@@ -123,6 +124,8 @@ html,body{height:100%;overflow:hidden;font-family:var(--zh);color:var(--txt);fon
   .cp{height:auto!important;max-height:70vh!important}
   .mbr-zone{max-height:160px}
   .cp-it{min-height:70px;max-height:180px}
+  .cp-hd{padding:10px 14px}
+  .cp-hd span{font-size:13px}
   .cp-ft{max-height:none}
   .cp-ft-body{max-height:220px}
 
@@ -163,6 +166,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--zh);color:var(--txt);fon
   #sb{width:80vw!important}
 
   /* ── Bottom nav ── */
+  #device-badge{display:none}
   #bottom-nav{display:flex!important}
 
   /* ── Member/order table: hide less important cols on mobile ── */
@@ -419,7 +423,8 @@ input[type=checkbox]{accent-color:var(--cr);width:15px;height:15px;cursor:pointe
   <nav class="sb-nav">
     <div class="nav-sec">Operations</div>
     <button class="ni on" data-page="pos">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>銷售結帳
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>結帳
+收銀
     </button>
     <button class="ni" data-page="inventory">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg>庫存管理
@@ -458,7 +463,7 @@ input[type=checkbox]{accent-color:var(--cr);width:15px;height:15px;cursor:pointe
     <button id="hbg">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
     </button>
-    <div id="pg-title">銷售結帳</div>
+    <div id="pg-title">結帳<br>收銀</div>
     <div id="device-badge" style="font-size:10px;color:var(--txt3);background:var(--p2);border-radius:4px;padding:2px 7px;font-family:var(--en);display:none"></div>
     <div id="tb-act"></div>
   </div>
@@ -952,7 +957,7 @@ updateDeviceBadge();
 window.addEventListener('resize', updateDeviceBadge);
 
 // ══ NAV ══
-const PAGE_TITLES = {pos:'銷售結帳',inventory:'庫存管理',orders:'訂單管理',reports:'報表統計',split:'闆娘分帳',members:'會員管理',settings:'管理設定',employees:'員工管理',sellship:'賣貨便月結',datamanage:'資料管理'};
+const PAGE_TITLES = {pos:'結帳收銀',inventory:'庫存管理',orders:'訂單管理',reports:'報表統計',split:'闆娘分帳',members:'會員管理',settings:'管理設定',employees:'員工管理',sellship:'賣貨便月結',datamanage:'資料管理'};
 const PF = {};
 
 function navigateTo(page) {
@@ -962,7 +967,7 @@ function navigateTo(page) {
   document.querySelectorAll('.bn-item').forEach(b => b.classList.remove('on'));
   const bBtn = document.querySelector('.bn-item[data-page="' + page + '"]');
   if (bBtn) bBtn.classList.add('on');
-  ge('pg-title').textContent = PAGE_TITLES[page] || page;
+  ge('pg-title').innerHTML = (PAGE_TITLES[page] || page).replace('結帳收銀','結帳<br>收銀');
   if (isMob()) closeSB();
   if (PF[page]) PF[page]();
 }
@@ -986,7 +991,7 @@ PF.pos = function() {
   ge('pg').innerHTML =
     '<div class="pos-lay">' +
       '<div class="pos-l">' +
-        '<div class="pos-f" id="pos-cats" style="margin-bottom:6px">' +
+        '<div class="pos-f" id="pos-cats" style="margin-bottom:4px">' +
           (cats.length <= 5
             ? cats.map(c => '<button class="cb' + (posCat===c?' on':'') + '" data-cat="' + c + '">' + c + '</button>').join('')
             : '<select id="cat-sel" class="fs" style="height:32px;padding:0 10px;font-size:12.5px;border-radius:20px;min-width:120px;border:1.5px solid ' + (posCat==='全部'?'var(--p3)':'var(--cr)') + ';color:' + (posCat==='全部'?'var(--txt2)':'var(--cr)') + ';font-weight:600;cursor:pointer;background:var(--w)">' +
@@ -2507,7 +2512,7 @@ function renderMbrTable() {
   tb.querySelectorAll('.mbr-pos').forEach(b => b.addEventListener('click', () => {
     document.querySelectorAll('.ni').forEach(n=>n.classList.remove('on'));
     document.querySelector('[data-page="pos"]').classList.add('on');
-    ge('pg-title').textContent = '銷售結帳';
+    ge('pg-title').innerHTML = '結帳<br>收銀';
     loadMemberToCart(b.dataset.id);
   }));
   tb.querySelectorAll('.mbr-del').forEach(b => b.addEventListener('click', () => {
@@ -2585,7 +2590,7 @@ function openMbrHistoryModal(mid) {
     close();
     document.querySelectorAll('.ni').forEach(n=>n.classList.remove('on'));
     document.querySelector('[data-page="pos"]').classList.add('on');
-    ge('pg-title').textContent='銷售結帳';
+    ge('pg-title').innerHTML = '結帳<br>收銀';
     loadMemberToCart(mid);
   });
 }
