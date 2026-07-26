@@ -1881,7 +1881,8 @@ PF.orders = function() {
       ordTab==='active'   ? orders.filter(o=>o.status==='處理中') :
       ordTab==='refunded' ? orders.filter(o=>o.status==='退款'||o.status==='部分退款') :
       orders
-    ).filter(o => (!ordDateFrom || o.date >= ordDateFrom) && (!ordDateTo || o.date <= ordDateTo));
+    ).filter(o => (!ordDateFrom || o.date >= ordDateFrom) && (!ordDateTo || o.date <= ordDateTo))
+    .sort((a,b) => (b.date||'').localeCompare(a.date||'') || (b.id||'').localeCompare(a.id||''));
   const refundedCount = orders.filter(o=>o.status==='退款'||o.status==='部分退款').length;
   const activeCount   = orders.filter(o=>o.status==='處理中').length;
   const bdg = s => s==='完成'?'<span class="bdg bg">完成</span>':s==='退款'?'<span class="bdg br">退款</span>':s==='部分退款'?'<span class="bdg br" style="background:#f5c0bd;color:#7a1010">部分退款</span>':'<span class="bdg ba">處理中</span>';
