@@ -3290,7 +3290,11 @@ PF.datamanage = function() {
         '<p style="font-size:13.5px;color:var(--txt2);margin-bottom:14px;line-height:1.7">資料會在以下情況<strong>自動儲存到這台裝置的瀏覽器</strong>：每次結帳、新增或編輯商品／會員、更改設定、每 60 秒，以及關閉頁面前。</p>' +
         '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
           '<button class="btn btn-p" id="save-now-btn">立即儲存</button>' +
-          '<button class="btn btn-d" id="clear-local-btn">清除本機資料</button>' +
+          '<div style="display:flex;flex-direction:column;gap:8px">' +
+          '<button class="btn btn-d" id="clear-local-btn">🗑 清除全部資料（本機 + 雲端）</button>' +
+          '<button class="btn btn-o" id="clear-fb-only-btn" style="border-color:#e57373;color:#b71c1c">☁ 只強制清除 Firebase 雲端</button>' +
+          '<div id="fb-clear-status" style="font-size:12px;color:var(--txt3);min-height:18px"></div>' +
+        '</div>' +
         '</div>' +
       '</div>' +
     '</div>' +
@@ -3381,6 +3385,48 @@ PF.datamanage = function() {
       localStorage.clear();
       location.reload();
     });
+  });
+
+  ge('clear-fb-only-btn')?.addEventListener('click', async () => {
+    const statusEl = ge('fb-clear-status');
+    if (!db) {
+      if (statusEl) statusEl.textContent = '❌ Firebase 未連線（離線模式）';
+      return;
+    }
+    if (!confirm('確定要清除 Firebase 雲端所有資料嗎？')) return;
+    if (statusEl) statusEl.textContent = '⏳ 正在連線 Firebase…';
+    try {
+      const cols = ['products','members','orders','employees','restockLog','config'];
+      let total = 0;
+      for (const col of cols) {
+        if (statusEl) statusEl.textContent = '⏳ 清除 ' + col + '…';
+        const snap = await db.collection(col).get();
+        if (!snap.empty) {
+          // Batch delete (max 500 per batch)
+          let batch = db.batch();
+          let count = 0;
+          for (const doc of snap.docs) {
+            batch.delete(doc.ref);
+            count++;
+            if (count === 500) {
+              await batch.commit();
+              batch = db.batch();
+              count = 0;
+            }
+          }
+          if (count > 0) await batch.commit();
+          total += snap.size;
+        }
+      }
+      if (statusEl) statusEl.textContent = '✅ 雲端已清除 ' + total + ' 筆資料！刷新頁面生效';
+      // Reset local state too
+      products = []; members = []; orders = []; employees = []; restockLog = [];
+      saveToLocal();
+      showToast('✅ Firebase 雲端已清除！');
+    } catch(e) {
+      console.error('FB clear error:', e);
+      if (statusEl) statusEl.textContent = '❌ 清除失敗：' + e.message;
+    }
   });
 
   ge('export-btn').addEventListener('click', exportBackup);
