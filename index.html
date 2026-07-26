@@ -3357,17 +3357,26 @@ PF.datamanage = function() {
     ge('cl-x').addEventListener('click', close);
     ge('cl-cancel').addEventListener('click', close);
     ge('cl-confirm').addEventListener('click', async () => {
-      // 清除 Firebase
-      if (fbReady) {
+      // 清除 Firebase（強制清除，不管 fbReady 狀態）
+      if (db) {
         try {
+          showToast('正在清除雲端資料…');
           const cols = ['products','members','orders','employees','restockLog','config'];
           for (const col of cols) {
             const snap = await db.collection(col).get();
-            const batch = db.batch();
-            snap.docs.forEach(doc => batch.delete(doc.ref));
-            await batch.commit();
+            if (!snap.empty) {
+              const batch = db.batch();
+              snap.docs.forEach(doc => batch.delete(doc.ref));
+              await batch.commit();
+            }
           }
-        } catch(e) { console.warn('FB clear error:', e); }
+          showToast('✅ 雲端資料已清除');
+        } catch(e) {
+          console.warn('FB clear error:', e);
+          showToast('⚠ 雲端清除失敗：' + e.message);
+        }
+      } else {
+        showToast('⚠ 未連上 Firebase，僅清除本機');
       }
       localStorage.clear();
       location.reload();
