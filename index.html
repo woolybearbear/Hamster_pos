@@ -194,7 +194,6 @@ html,body{height:100%;overflow:hidden;font-family:var(--zh);color:var(--txt);fon
 
   /* ── Form inputs ── */
   .fi{padding:8px 10px;font-size:13px}
-  #pg-title br{display:none}
   .fg label{font-size:10.5px}
 }
 
@@ -444,8 +443,7 @@ input[type=checkbox]{accent-color:var(--cr);width:15px;height:15px;cursor:pointe
   <nav class="sb-nav">
     <div class="nav-sec">Operations</div>
     <button class="ni on" data-page="pos">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>結帳
-收銀
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>結帳收銀
     </button>
     <button class="ni" data-page="inventory">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg>庫存管理
@@ -484,7 +482,7 @@ input[type=checkbox]{accent-color:var(--cr);width:15px;height:15px;cursor:pointe
     <button id="hbg">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
     </button>
-    <div id="pg-title">結帳<br>收銀</div>
+    <div id="pg-title">結帳收銀</div>
     <div id="device-badge" style="font-size:10px;color:var(--txt3);background:var(--p2);border-radius:4px;padding:2px 7px;font-family:var(--en);display:none"></div>
     <div id="tb-act"></div>
   </div>
@@ -627,17 +625,10 @@ async function loadFromFB() {
       fbReady = true;
       return true;
     } else {
-      // Firestore 是空的，從 localStorage 載入並上傳
-      const loaded = loadFromLocal();
-      if (loaded) {
-        showSyncStatus('上傳本機資料…');
-        await pushAllToFB();
-        showSyncStatus('✅ 已同步');
-      } else {
-        showSyncStatus('✅ 全新開始');
-      }
+      // Firestore 是空的 → 全新開始（不自動上傳本機舊資料，避免污染雲端）
+      showSyncStatus('✅ 全新開始');
       fbReady = true;
-      return loaded;
+      return false;
     }
   } catch(e) {
     console.warn('FB load error:', e);
@@ -800,7 +791,12 @@ let cartMember = null;
 // ══ HELPERS ══
 const ge = id => document.getElementById(id);
 const fm = n => '$' + Number(n).toLocaleString();
-const today = () => new Date().toISOString().split('T')[0];
+const today = () => {
+  const d = new Date();
+  return d.getFullYear() + '-' +
+    String(d.getMonth()+1).padStart(2,'0') + '-' +
+    String(d.getDate()).padStart(2,'0');
+};
 
 function genId() {
   const d = new Date();
@@ -988,7 +984,7 @@ function navigateTo(page) {
   document.querySelectorAll('.bn-item').forEach(b => b.classList.remove('on'));
   const bBtn = document.querySelector('.bn-item[data-page="' + page + '"]');
   if (bBtn) bBtn.classList.add('on');
-  ge('pg-title').innerHTML = (PAGE_TITLES[page] || page).replace('結帳收銀','結帳<br>收銀');
+  ge('pg-title').innerHTML = PAGE_TITLES[page] || page;
   if (isMob()) closeSB();
   if (PF[page]) PF[page]();
 }
@@ -2544,7 +2540,7 @@ function renderMbrTable() {
   tb.querySelectorAll('.mbr-pos').forEach(b => b.addEventListener('click', () => {
     document.querySelectorAll('.ni').forEach(n=>n.classList.remove('on'));
     document.querySelector('[data-page="pos"]').classList.add('on');
-    ge('pg-title').innerHTML = '結帳<br>收銀';
+    ge('pg-title').textContent = '結帳收銀';
     loadMemberToCart(b.dataset.id);
   }));
   tb.querySelectorAll('.mbr-del').forEach(b => b.addEventListener('click', () => {
@@ -2622,7 +2618,7 @@ function openMbrHistoryModal(mid) {
     close();
     document.querySelectorAll('.ni').forEach(n=>n.classList.remove('on'));
     document.querySelector('[data-page="pos"]').classList.add('on');
-    ge('pg-title').innerHTML = '結帳<br>收銀';
+    ge('pg-title').textContent = '結帳收銀';
     loadMemberToCart(mid);
   });
 }
