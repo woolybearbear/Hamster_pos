@@ -1962,14 +1962,18 @@ PF.orders = function() {
           (refundedCount>0 ? '<span style="margin-left:5px;background:#777;color:#fff;border-radius:10px;padding:0 6px;font-size:10px;font-family:var(--en)">'+refundedCount+'</span>' : '') +
         '</button>' +
       '</div>' +
-      '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto">' +
-        '<button class="btn btn-o btn-sm' + (_today===ordDateFrom&&_today===ordDateTo?' btn-p':'') + '" id="ord-dt-today">今日</button>' +
-        '<button class="btn btn-o btn-sm' + (_weekStart===ordDateFrom&&_today===ordDateTo?' btn-p':'') + '" id="ord-dt-week">本週</button>' +
-        '<button class="btn btn-o btn-sm' + (_monthStart===ordDateFrom&&_today===ordDateTo?' btn-p':'') + '" id="ord-dt-month">本月</button>' +
-        '<input type="date" id="ord-from" value="' + ordDateFrom + '" style="height:30px;padding:0 7px;border:1.5px solid var(--p3);border-radius:var(--r);font-size:12.5px;color:var(--txt1);background:var(--bg)">' +
-        '<span style="font-size:12px;color:var(--txt3)">–</span>' +
-        '<input type="date" id="ord-to" value="' + ordDateTo + '" style="height:30px;padding:0 7px;border:1.5px solid var(--p3);border-radius:var(--r);font-size:12.5px;color:var(--txt1);background:var(--bg)">' +
-        (ordDateFrom||ordDateTo ? '<button class="btn btn-d btn-sm" id="ord-dt-clr">✕ 清除</button>' : '') +
+      '<div style="display:flex;flex-direction:column;gap:6px;margin-left:auto;width:100%">' +
+        '<div style="display:flex;gap:6px;align-items:center">' +
+          '<button class="btn btn-o btn-sm' + (_today===ordDateFrom&&_today===ordDateTo?' btn-p':'') + '" id="ord-dt-today">今日</button>' +
+          '<button class="btn btn-o btn-sm' + (_weekStart===ordDateFrom&&_today===ordDateTo?' btn-p':'') + '" id="ord-dt-week">本週</button>' +
+          '<button class="btn btn-o btn-sm' + (_monthStart===ordDateFrom&&_today===ordDateTo?' btn-p':'') + '" id="ord-dt-month">本月</button>' +
+          (ordDateFrom||ordDateTo ? '<button class="btn btn-d btn-sm" id="ord-dt-clr">✕ 清除</button>' : '') +
+        '</div>' +
+        '<div style="display:flex;gap:6px;align-items:center">' +
+          '<input type="date" id="ord-from" value="' + ordDateFrom + '" style="flex:1;height:32px;padding:0 8px;border:1.5px solid var(--p3);border-radius:var(--r);font-size:12px;color:var(--txt1);background:var(--bg);min-width:0">' +
+          '<span style="font-size:12px;color:var(--txt3);flex-shrink:0">–</span>' +
+          '<input type="date" id="ord-to" value="' + ordDateTo + '" style="flex:1;height:32px;padding:0 8px;border:1.5px solid var(--p3);border-radius:var(--r);font-size:12px;color:var(--txt1);background:var(--bg);min-width:0">' +
+        '</div>' +
       '</div>' +
     '</div>' +
     (list.length===0 ?
