@@ -88,14 +88,14 @@ html,body{height:100%;overflow:hidden;font-family:var(--zh);color:var(--txt);fon
 
   /* ── Layout ── */
   #pg{padding:10px 12px}
-  #tb{padding:0 12px;height:var(--tbh)}
-  #pg-title{font-size:13px;line-height:1.2;white-space:normal}
+  #tb{padding:0 10px;height:var(--tbh)}
+  #pg-title{font-size:12px;line-height:1;white-space:nowrap;letter-spacing:0;flex:0 0 auto}
   #pg-title{font-size:14px;letter-spacing:0}
   #main{padding-bottom:58px}
   #pg{padding-bottom:70px}
 
   /* ── Toolbar action buttons ── */
-  #tb-act{gap:4px}
+  #tb-act{gap:4px;flex:1;justify-content:flex-end}
   #tb-act .btn{padding:5px 9px;font-size:11px;gap:3px}
   #tb-act .btn svg{width:13px;height:13px}
 
@@ -163,6 +163,11 @@ html,body{height:100%;overflow:hidden;font-family:var(--zh);color:var(--txt);fon
   .sc-lbl{font-size:10.5px!important}
   .sc-sub{font-size:10.5px!important}
 
+  /* ── POS search bar ── */
+  #pos-sw{width:auto!important;flex:1}
+  #pos-srch{font-size:12px}
+  /* ── sw input base ── */
+
   /* ── Modal: bottom sheet ── */
   .modal{width:100vw!important;max-width:100vw!important;
          border-radius:16px 16px 0 0;position:fixed;
@@ -175,6 +180,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--zh);color:var(--txt);fon
   .rpt-exp-btn .btn-txt{display:none}
   .mhd{padding:12px 16px}
   .mttl{font-size:14px}
+  .mbd{padding:16px!important}
 
   /* ── Sidebar ── */
   #sb{width:80vw!important}
@@ -188,6 +194,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--zh);color:var(--txt);fon
 
   /* ── Form inputs ── */
   .fi{padding:8px 10px;font-size:13px}
+  #pg-title br{display:none}
   .fg label{font-size:10.5px}
 }
 
@@ -998,7 +1005,7 @@ document.querySelectorAll('.bn-item').forEach(btn => {
 // POS PAGE
 // ══════════════════════════════════════
 PF.pos = function() {
-  ge('tb-act').innerHTML = '<div class="sw" style="width:200px">' + IC.search + '<input id="pos-srch" placeholder="搜尋商品…"></div>';
+  ge('tb-act').innerHTML = '<div class="sw" style="width:200px" id="pos-sw">' + IC.search + '<input id="pos-srch" placeholder="搜尋商品…"></div>';
   ge('pos-srch').addEventListener('input', function(){ posSearch = this.value; renderPosGrid(); });
 
   const cats = ['全部', ...new Set(products.map(p => p.cat))];
@@ -1830,18 +1837,24 @@ function openProdModal(id) {
   ov.innerHTML =
     '<div class="modal">' +
       '<div class="mhd"><div class="mttl">' + (p?'編輯商品':'新增商品') + '</div><button class="btn-g" id="pm-x">' + IC.x + '</button></div>' +
-      '<div class="mbd"><div class="g2">' +
-        '<div class="fg"><label>商品名稱</label><input class="fi" id="pf-nm" value="' + (p?.name||'') + '"></div>' +
-        '<div class="fg"><label>分類</label><select class="fs" id="pf-cat">' + cats.map(c=>'<option'+(p?.cat===c?' selected':'')+'>'+c+'</option>').join('') + '<option value="_new">＋ 新增分類</option></select></div>' +
-        '<div class="fg"><label>歸屬闆娘</label><select class="fs" id="pf-own">' + shopConfig.owners.map(o => '<option'+(p?.owner===o?' selected':'')+'>'+o+'</option>').join('') + '<option value="共同"'+(p?.owner==="共同"?' selected':'')+'>⚖ 共同均攤</option></select></div>' +
-        '<div class="fg"><label>售價（元）</label><input class="fi" type="number" id="pf-pr" value="' + (p?.price||'') + '"></div>' +
-        '<div class="fg"><label>成本（元）</label><input class="fi" type="number" id="pf-co" value="' + (p?.cost||'') + '"></div>' +
-        '<div class="fg"><label>庫存數量</label><input class="fi" type="number" id="pf-st" value="' + (p?.stock||'') + '"></div>' +
-        '<div class="fg"><label>單位</label><input class="fi" id="pf-un" value="' + (p?.unit||'') + '"></div>' +
-        '<div class="fg"><label>低庫存警示值</label><input class="fi" type="number" id="pf-lo" value="' + (p?.lowStock||5) + '"></div>' +
-        '<div class="fg" style="grid-column:span 2"><label>條碼 / SKU</label><input class="fi" id="pf-bc" value="' + (p?.barcode||'') + '"></div>' +
-        '<div class="fg" style="grid-column:span 2"><label>規格說明 <span style="font-size:11px;font-weight:400;color:var(--txt3)">（選填，例：顏色、尺寸、材質…）</span></label><textarea class="fi" id="pf-sp" rows="2" placeholder="例：黑色 / 30cm×20cm / 棉質" style="resize:none;line-height:1.6">' + (p?.spec||'') + '</textarea></div>' +
-      '</div></div>' +
+      '<div class="mbd" style="display:flex;flex-direction:column;gap:14px">' +
+        '<div class="fg" style="margin:0"><label>商品名稱</label><input class="fi" id="pf-nm" placeholder="請輸入商品名稱" value="' + (p?.name||'') + '"></div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+          '<div class="fg" style="margin:0"><label>分類</label><select class="fs" id="pf-cat">' + cats.map(c=>'<option'+(p?.cat===c?' selected':'')+'>'+c+'</option>').join('') + '<option value="_new">＋ 新增分類</option></select></div>' +
+          '<div class="fg" style="margin:0"><label>歸屬闆娘</label><select class="fs" id="pf-own">' + shopConfig.owners.map(o => '<option'+(p?.owner===o?' selected':'')+'>'+o+'</option>').join('') + '<option value="共同"'+(p?.owner==="共同"?' selected':'')+'>⚖ 共同均攤</option></select></div>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+          '<div class="fg" style="margin:0"><label>售價（元）</label><input class="fi" type="number" id="pf-pr" placeholder="0" value="' + (p?.price||'') + '"></div>' +
+          '<div class="fg" style="margin:0"><label>成本（元）</label><input class="fi" type="number" id="pf-co" placeholder="0" value="' + (p?.cost||'') + '"></div>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">' +
+          '<div class="fg" style="margin:0"><label>庫存數量</label><input class="fi" type="number" id="pf-st" placeholder="0" value="' + (p?.stock||'') + '"></div>' +
+          '<div class="fg" style="margin:0"><label>單位</label><input class="fi" id="pf-un" placeholder="個" value="' + (p?.unit||'') + '"></div>' +
+        '</div>' +
+        '<div class="fg" style="margin:0"><label>低庫存警示值</label><input class="fi" type="number" id="pf-lo" value="' + (p?.lowStock||5) + '"></div>' +
+        '<div class="fg" style="margin:0"><label>條碼 / SKU</label><input class="fi" id="pf-bc" placeholder="選填" value="' + (p?.barcode||'') + '"></div>' +
+        '<div class="fg" style="margin:0"><label>規格說明 <span style="font-size:11px;font-weight:400;color:var(--txt3)">（選填，例：顏色、尺寸、材質…）</span></label><textarea class="fi" id="pf-sp" rows="3" placeholder="例：黑色 / 30cm×20cm / 棉質" style="resize:vertical;line-height:1.6;min-height:72px">' + (p?.spec||'') + '</textarea></div>' +
+      '</div>' +
       '<div class="mft"><button class="btn btn-o" id="pm-cancel">取消</button><button class="btn btn-p" id="pm-save">' + IC.check + ' 儲存</button></div>' +
     '</div>';
   document.body.appendChild(ov);
