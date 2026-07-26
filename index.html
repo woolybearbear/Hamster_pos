@@ -358,6 +358,7 @@ input[type=checkbox]{accent-color:var(--cr);width:15px;height:15px;cursor:pointe
   <!-- Firebase compat SDK（讓 HTML 單檔也能用）-->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
 </head>
 <body>
 
@@ -409,6 +410,9 @@ input[type=checkbox]{accent-color:var(--cr);width:15px;height:15px;cursor:pointe
     </button>
     <button class="ni" data-page="employees">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>員工
+    </button>
+    <button class="ni" data-page="sellship">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13" rx="2"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>賣貨便月結
     </button>
     <button class="ni" data-page="datamanage">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>資料管理
@@ -462,8 +466,13 @@ const firebaseConfig = {
   messagingSenderId: "522798051865",
   appId: "1:522798051865:web:867f5a2b27401d817df088"
 };
-firebase.initializeApp(firebaseConfig);
-const db = firebase.firestore();
+let db = null;
+try {
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.firestore();
+} catch(e) {
+  console.warn('Firebase 初始化失敗（離線模式）:', e);
+}
 
 // ── Firebase 狀態 ──
 let fbReady = false;
@@ -471,12 +480,12 @@ let fbListeners = []; // 儲存 unsubscribe functions
 
 // ── Firestore 集合參照 ──
 const COL = {
-  products:   () => db.collection('products'),
-  members:    () => db.collection('members'),
-  orders:     () => db.collection('orders'),
-  employees:  () => db.collection('employees'),
-  restockLog: () => db.collection('restockLog'),
-  config:     () => db.collection('config'),
+  products:   () => db && db.collection('products'),
+  members:    () => db && db.collection('members'),
+  orders:     () => db && db.collection('orders'),
+  employees:  () => db && db.collection('employees'),
+  restockLog: () => db && db.collection('restockLog'),
+  config:     () => db && db.collection('config'),
 };
 
 // ── 序列化：移除 undefined，確保 Firestore 可接受 ──
@@ -528,6 +537,7 @@ async function deleteDocFromFB(colName, id) {
 
 // ── 從 Firestore 載入所有資料 ──
 async function loadFromFB() {
+  if (!db) return false;
   try {
     showSyncStatus('載入中…');
     const [prodSnap, memSnap, ordSnap, empSnap, logSnap, cfgSnap] = await Promise.all([
@@ -579,6 +589,7 @@ async function loadFromFB() {
 
 // ── 把所有本機資料推送到 Firestore ──
 async function pushAllToFB() {
+  if (!db) return;
   await Promise.all([
     saveCollectionToFB('products', products),
     saveCollectionToFB('members', members),
@@ -592,6 +603,7 @@ async function pushAllToFB() {
 
 // ── 即時監聽（讓兩台裝置同步）──
 function startRealtimeSync() {
+  if (!db) return;
   // 清除舊監聽
   fbListeners.forEach(unsub => unsub());
   fbListeners = [];
@@ -712,6 +724,7 @@ let products = [];
 let members = [];
 
 let orders = [];
+let externalOrders = []; // 賣貨便匯入的訂單
 
 let employees = [];
 
@@ -906,7 +919,7 @@ updateDeviceBadge();
 window.addEventListener('resize', updateDeviceBadge);
 
 // ══ NAV ══
-const PAGE_TITLES = {pos:'銷售結帳',inventory:'庫存管理',orders:'訂單管理',reports:'報表統計',split:'闆娘分帳',members:'會員管理',settings:'管理設定',employees:'員工管理',datamanage:'資料管理'};
+const PAGE_TITLES = {pos:'銷售結帳',inventory:'庫存管理',orders:'訂單管理',reports:'報表統計',split:'闆娘分帳',members:'會員管理',settings:'管理設定',employees:'員工管理',sellship:'賣貨便月結',datamanage:'資料管理'};
 const PF = {};
 
 function navigateTo(page) {
@@ -940,7 +953,6 @@ PF.pos = function() {
   ge('pg').innerHTML =
     '<div class="pos-lay">' +
       '<div class="pos-l">' +
-        // ── 第一排：分類（≤5 用 button，>5 用下拉）──
         '<div class="pos-f" id="pos-cats" style="margin-bottom:6px">' +
           (cats.length <= 5
             ? cats.map(c => '<button class="cb' + (posCat===c?' on':'') + '" data-cat="' + c + '">' + c + '</button>').join('')
@@ -948,7 +960,6 @@ PF.pos = function() {
               cats.map(c => '<option value="' + c + '"' + (posCat===c?' selected':'') + '>' + c + '</option>').join('') +
               '</select>') +
         '</div>' +
-        // ── 第二排：闆娘篩選（永遠全部顯示）──
         '<div class="pos-f" id="pos-owners">' +
           '<button class="cb cb-w' + (posOwner===shopConfig.owners[0]?' on':'') + '" data-owner="' + shopConfig.owners[0] + '">' + shopConfig.owners[0] + '</button>' +
           '<button class="cb cb-m' + (posOwner===shopConfig.owners[1]?' on':'') + '" data-owner="' + shopConfig.owners[1] + '">' + shopConfig.owners[1] + '</button>' +
@@ -969,42 +980,12 @@ PF.pos = function() {
         '</div>' +
         '<div class="cp-it" id="cp-items"></div>' +
         '<div class="cp-ft">' +
-          '<div class="cp-ft-body">' +
-            '<div style="margin-bottom:10px">' +
-              '<div class="ct-row"><span>小計</span><span class="tn" id="cp-sub">$0</span></div>' +
-              '<div class="ct-row"><span>折扣 %</span>' +
-                '<div class="dr"><input type="number" id="disc-pct" min="0" max="100" value="' + discount + '" style="width:44px"><span>%</span><span id="disc-pct-hint" style="color:var(--cr);font-weight:600;font-family:var(--en)"></span></div>' +
-              '</div>' +
-              '<div class="ct-row"><span>折扣金額</span>' +
-                '<div class="dr"><span style="font-family:var(--en);font-size:12px">$</span><input type="number" id="disc-fix" min="0" value="' + discountFix + '" placeholder="0"><span id="disc-fix-hint" style="color:var(--cr);font-weight:600;font-family:var(--en)"></span></div>' +
-              '</div>' +
-              '<div id="disc-conflict" style="display:none;font-size:11px;color:#7a5800;background:#fff8e6;border:1px solid #ffe08a;border-radius:5px;padding:5px 9px;margin-top:-4px;margin-bottom:4px">⚠ 兩種折扣只能擇一，已自動清除另一項</div>' +
-              '<div id="pts-deduct-row" class="ct-row" style="display:none;color:var(--gold)"><span>點數折抵</span><div class="dr"><span class="pd-amt" style="font-family:var(--en);font-weight:700"></span></div></div>' +
-              '<div class="ct-row" id="pts-preview" style="display:none"></div>' +
-              '<div class="ct-tot"><span>合計</span><span class="amt" id="cp-tot">$0</span></div>' +
-            '</div>' +
-            '<div class="pay-g" id="pay-methods">' +
-              ['現金','信用卡','Line Pay','街口','悠遊卡','轉帳'].map(m => '<button class="po' + (payMethod===m?' on':'') + '" data-pay="' + m + '">' + m + '</button>').join('') +
-            '</div>' +
-            '<div class="fg" style="margin:0 0 9px"><textarea id="order-note" rows="2" placeholder="訂單備註（例：過敏資訊、指定顏色、特別要求…）" style="width:100%;padding:7px 10px;border:1.5px solid var(--p3);border-radius:var(--r);font-family:var(--zh);font-size:12px;resize:none;outline:none;color:var(--txt);background:var(--w);transition:border-color .18s" onfocus="this.style.borderColor=\'var(--cr)\'" onblur="this.style.borderColor=\'var(--p3)\'"></textarea></div>' +
-            '<div id="change-row" style="display:none;margin-bottom:9px">' +
-              '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">' +
-                '<span style="font-size:12.5px;color:var(--txt3);flex-shrink:0">客付金額</span>' +
-                '<div style="display:flex;align-items:center;gap:4px;flex:1">' +
-                  '<span style="font-family:var(--en);font-size:12px;color:var(--txt3)">$</span>' +
-                  '<input type="number" id="cash-paid" min="0" placeholder="0" style="flex:1;padding:5px 8px;border:1.5px solid var(--p3);border-radius:var(--r);font-family:var(--en);font-size:13px;font-weight:600;outline:none;color:var(--ink);background:var(--w);transition:border-color .18s" onfocus="this.style.borderColor=\'var(--cr)\'" onblur="this.style.borderColor=\'var(--p3)\'">' +
-                  '<div style="display:flex;gap:4px" id="quick-cash"></div>' +
-                '</div>' +
-              '</div>' +
-              '<div id="change-display" style="display:none;background:var(--p2);border-radius:var(--r);padding:8px 12px;display:flex;justify-content:space-between;align-items:center">' +
-                '<span style="font-size:13px;font-weight:500">找零</span>' +
-                '<span id="change-amt" style="font-family:var(--en);font-size:20px;font-weight:700;color:var(--cr)">$0</span>' +
-              '</div>' +
-            '</div>' +
+          '<div style="margin-bottom:10px;padding:0 14px">' +
+            '<div class="ct-row"><span>小計</span><span class="tn" id="cp-sub">$0</span></div>' +
+            '<div class="ct-row" id="disc-row" style="display:none"><span>折扣</span><span id="disc-hint-sm" style="color:var(--cr);font-weight:600;font-family:var(--en)"></span></div>' +
+            '<div class="ct-tot"><span>合計</span><span class="amt" id="cp-tot">$0</span></div>' +
           '</div>' +
-          '<div class="cp-ft-btn">' +
-            '<button class="btn btn-p btn-lg" style="width:100%;justify-content:center" id="ck-btn" disabled>結帳</button>' +
-          '</div>' +
+          '<div style="padding:0 14px 14px"><button class="btn btn-p btn-lg" style="width:100%;justify-content:center" id="ck-btn" disabled>結帳</button></div>' +
         '</div>' +
       '</div>' +
     '</div>';
@@ -1040,97 +1021,16 @@ PF.pos = function() {
     }
   });
 
-  ge('pay-methods').addEventListener('click', e => {
-    const btn = e.target.closest('.po'); if (!btn) return;
-    payMethod = btn.dataset.pay;
-    ge('pay-methods').querySelectorAll('.po').forEach(b => b.classList.remove('on'));
-    btn.classList.add('on');
-  });
+  // pay method is handled inside openCheckoutModal
 
-  ge('disc-pct').addEventListener('input', function() {
-    discount = Math.min(100, Math.max(0, +this.value||0));
-    const conflict = ge('disc-conflict');
-    if (discount > 0 && discountFix > 0) {
-      discountFix = 0;
-      const df = ge('disc-fix'); if (df) df.value = 0;
-      const fh = ge('disc-fix-hint'); if (fh) fh.textContent = '';
-      if (conflict) conflict.style.display = 'block';
-    } else {
-      if (conflict) conflict.style.display = 'none';
-    }
-    renderCartTotals();
-  });
-  ge('disc-fix').addEventListener('input', function() {
-    discountFix = Math.max(0, +this.value||0);
-    const conflict = ge('disc-conflict');
-    if (discountFix > 0 && discount > 0) {
-      discount = 0;
-      const dp = ge('disc-pct'); if (dp) dp.value = 0;
-      const ph = ge('disc-pct-hint'); if (ph) ph.textContent = '';
-      if (conflict) conflict.style.display = 'block';
-    } else {
-      if (conflict) conflict.style.display = 'none';
-    }
-    renderCartTotals();
-  });
+
+  
   ge('mbr-srch-btn').addEventListener('click', searchMember);
   ge('mbr-phone').addEventListener('keydown', e => { if (e.key==='Enter') searchMember(); });
   ge('mbr-clr-btn').addEventListener('click', clearMember);
-  ge('ck-btn').addEventListener('click', doCheckout);
+  ge('ck-btn').addEventListener('click', openCheckoutModal);
 
-  // Change calculator: show only when payment = 現金
-  function updateChangeRow() {
-    const row = ge('change-row');
-    const disp = ge('change-display');
-    if (!row) return;
-    if (payMethod === '現金') {
-      row.style.display = 'block';
-      // quick-cash buttons
-      const sub = cart.reduce((s,x)=>s+x.price*x.qty, 0);
-      const dAmt = Math.round(sub*(discount/100));
-      const tot = Math.max(0, sub - dAmt - discountFix);
-      const qc = ge('quick-cash');
-      if (qc) {
-        const presets = [100,200,500,1000].filter(v=>v>=tot);
-        const rounded = Math.ceil(tot/10)*10;
-        const qtSet = [...new Set([rounded,...presets])].slice(0,3);
-        qc.innerHTML = qtSet.map(v=>'<button class="btn btn-o btn-sm quick-fill" data-val="'+v+'" style="font-family:var(--en);padding:4px 8px;font-size:11px">'+v+'</button>').join('');
-        qc.querySelectorAll('.quick-fill').forEach(b=>b.addEventListener('click',function(){
-          const cp=ge('cash-paid'); if(cp){cp.value=this.dataset.val; calcChange();}
-        }));
-      }
-    } else {
-      row.style.display = 'none';
-    }
-  }
-
-  function calcChange() {
-    const paid = +ge('cash-paid')?.value || 0;
-    const sub = cart.reduce((s,x)=>s+x.price*x.qty, 0);
-    const dAmt = Math.round(sub*(discount/100));
-    const tot = Math.max(0, sub - dAmt - discountFix);
-    const disp = ge('change-display');
-    const amtEl = ge('change-amt');
-    if (!disp || !amtEl) return;
-    if (paid > 0) {
-      disp.style.display = 'flex';
-      const change = paid - tot;
-      amtEl.textContent = change >= 0 ? fm(change) : '不足 ' + fm(Math.abs(change));
-      amtEl.style.color = change >= 0 ? 'var(--cr)' : '#b71c1c';
-    } else {
-      disp.style.display = 'none';
-    }
-  }
-
-  ge('cash-paid')?.addEventListener('input', calcChange);
-
-  // Override pay-methods to toggle change row
-  ge('pay-methods').addEventListener('click', () => {
-    setTimeout(updateChangeRow, 10);
-  });
-
-  updateChangeRow();
-
+  
   renderPosGrid();
   renderCartItems();
 };
@@ -1308,38 +1208,149 @@ function renderCartTotals() {
     ? Math.min(Math.floor(cartMember.points / shopConfig.pointsRate), Math.max(0, sub - dAmt - discountFix))
     : 0;
   const tot  = Math.max(0, sub - dAmt - discountFix - ptDeduct);
+  // Update simplified footer
   const s = ge('cp-sub'); if (s) s.textContent = fm(sub);
-  const ph = ge('disc-pct-hint'); if (ph) ph.textContent = dAmt>0 ? '-'+fm(dAmt) : '';
-  const fh = ge('disc-fix-hint'); if (fh) fh.textContent = discountFix>0 ? '-'+fm(discountFix) : '';
   const t = ge('cp-tot'); if (t) t.textContent = fm(tot);
-  const pd = ge('pts-deduct-row');
-  if (pd) { pd.style.display = (ptDeduct>0) ? 'flex' : 'none'; pd.querySelector('.pd-amt').textContent = '-'+fm(ptDeduct); }
-  const pp = ge('pts-preview');
-  if (pp) {
-    if (cartMember && sub > 0) {
-      const ptsEarned  = Math.floor(sub / 100);                          // 累積：以小計為準
-      const ptsUsedPrv = ptDeduct * shopConfig.pointsRate;               // 折抵消耗點數
-      const redeemCostPrv = redeemIds.reduce((s,rid) => {
-        const ri = shopConfig.redeemItems.find(x => x.id===rid);
-        return s + (ri ? ri.points : 0);
-      }, 0);
-      const remaining = Math.max(0, cartMember.points - ptsUsedPrv - redeemCostPrv + ptsEarned);
-      pp.style.display = 'flex';
-      pp.style.flexDirection = 'column';
-      pp.style.gap = '2px';
-      pp.innerHTML =
-        '<div style="display:flex;justify-content:space-between"><span>本次累積</span><span style="font-family:var(--en);font-weight:700;color:var(--gold)">+' + ptsEarned + ' pt</span></div>' +
-        (ptsUsedPrv > 0 || redeemCostPrv > 0
-          ? '<div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--txt3)"><span>結帳後餘點</span><span style="font-family:var(--en);font-weight:600">' + remaining + ' pt</span></div>'
-          : '');
-    } else { pp.style.display = 'none'; }
+  // Show discount row if any discount applied
+  const discRow = ge('disc-row');
+  const discHint = ge('disc-hint-sm');
+  if (discRow && discHint) {
+    const hasDisc = dAmt > 0 || discountFix > 0 || ptDeduct > 0;
+    discRow.style.display = hasDisc ? 'flex' : 'none';
+    let hints = [];
+    if (dAmt > 0) hints.push('-' + fm(dAmt) + ' (' + discount + '%)');
+    if (discountFix > 0) hints.push('-' + fm(discountFix));
+    if (ptDeduct > 0) hints.push('-' + fm(ptDeduct) + ' (點數)');
+    discHint.textContent = hints.join(' ');
   }
+  // Update checkout button
   const btn = ge('ck-btn');
-  if (btn) { btn.disabled = cart.length===0; btn.textContent = cart.length>0 ? '結帳   '+fm(tot) : '結帳'; }
-  if (typeof updateChangeRow !== 'undefined') { updateChangeRow(); calcChange(); }
+  if (btn) {
+    btn.disabled = cart.length === 0;
+    btn.textContent = cart.length > 0 ? '結帳   ' + fm(tot) : '結帳';
+  }
 }
 
-function doCheckout() {
+function openCheckoutModal() {
+  if (!cart.length) return;
+  const sub  = cart.reduce((s,x) => s+x.price*x.qty, 0);
+  const dAmt = Math.round(sub * (discount/100));
+  const ptDeduct = (usePoints && cartMember)
+    ? Math.min(Math.floor(cartMember.points / shopConfig.pointsRate), Math.max(0, sub - dAmt - discountFix))
+    : 0;
+  let curTot = Math.max(0, sub - dAmt - discountFix - ptDeduct);
+
+  const payMethods = ['現金','信用卡','Line Pay','街口','悠遊卡','轉帳'];
+
+  const ov = document.createElement('div');
+  ov.className = 'ovm';
+  ov.innerHTML =
+    '<div class="modal" style="max-width:420px">' +
+      '<div class="mhd">' +
+        '<div class="mttl">結帳</div>' +
+        '<button class="btn-g" id="ck-x">' + IC.x + '</button>' +
+      '</div>' +
+      '<div style="padding:16px 20px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:var(--p2);border-radius:var(--r);margin-bottom:16px">' +
+          '<span style="font-size:13px;color:var(--txt3)">' + cart.reduce((s,x)=>s+x.qty,0) + ' 件商品</span>' +
+          '<div style="text-align:right">' +
+            (dAmt>0||discountFix>0||ptDeduct>0
+              ? '<div style="font-size:11px;color:var(--txt3);text-decoration:line-through;font-family:var(--en)">' + fm(sub) + '</div>'
+              : '') +
+            '<div style="font-family:var(--en);font-size:26px;font-weight:700;color:var(--cr);line-height:1" id="ck-tot-disp">' + fm(curTot) + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div style="margin-bottom:16px">' +
+          '<div style="font-size:11px;font-weight:700;color:var(--txt3);letter-spacing:.5px;margin-bottom:8px">付款方式</div>' +
+          '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px" id="ck-pay-g">' +
+            payMethods.map(m =>
+              '<button class="po' + (payMethod===m?' on':'') + '" data-pay="' + m + '" style="padding:11px 4px;font-size:13px;font-weight:600">' + m + '</button>'
+            ).join('') +
+          '</div>' +
+        '</div>' +
+        '<div id="ck-change-wrap" style="' + (payMethod==='現金'?'':' display:none;') + 'margin-bottom:14px">' +
+          '<div style="font-size:11px;font-weight:700;color:var(--txt3);letter-spacing:.5px;margin-bottom:6px">客付金額 $</div>' +
+          '<input type="number" id="ck-cash-paid" min="0" placeholder="0" class="fi" style="font-family:var(--en);font-size:16px;font-weight:600">' +
+          '<div id="ck-change-display" style="display:none;background:var(--p2);border-radius:var(--r);padding:9px 14px;margin-top:8px;display:flex;justify-content:space-between;align-items:center">' +
+            '<span style="font-size:13px;font-weight:500">找零</span>' +
+            '<span id="ck-change-amt" style="font-family:var(--en);font-size:22px;font-weight:700;color:var(--cr)">$0</span>' +
+          '</div>' +
+        '</div>' +
+        '<details style="margin-bottom:14px">' +
+          '<summary style="font-size:12px;color:var(--txt3);cursor:pointer;user-select:none;list-style:none;display:flex;align-items:center;gap:4px">' +
+            '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>' +
+            '套用折扣' +
+            (discount>0||discountFix>0 ? '<span style="color:var(--cr);font-weight:700;margin-left:4px">' + (discount>0?'−'+discount+'%':'') + (discountFix>0?' −$'+discountFix.toLocaleString():'')+'</span>' : '') +
+          '</summary>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">' +
+            '<div class="fg" style="margin:0"><label>折扣 %</label>' +
+              '<div class="dr"><input type="number" id="ck-disc-pct" min="0" max="100" value="' + discount + '" style="width:100%;padding:7px 10px"><span>%</span></div></div>' +
+            '<div class="fg" style="margin:0"><label>折扣金額 $</label>' +
+              '<input type="number" id="ck-disc-fix" min="0" value="' + discountFix + '" placeholder="0" class="fi" style="font-family:var(--en)"></div>' +
+          '</div>' +
+        '</details>' +
+        '<input type="text" id="ck-note" placeholder="訂單備註（選填）" class="fi" style="margin-bottom:16px">' +
+      '</div>' +
+      '<div style="padding:0 20px 20px">' +
+        '<button class="btn btn-p btn-lg" id="ck-confirm" style="width:100%;justify-content:center;font-size:16px;padding:14px">確認結帳 <span id="ck-confirm-amt">' + fm(curTot) + '</span></button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(ov);
+
+  const close = () => ov.remove();
+  ov.querySelector('#ck-x').addEventListener('click', close);
+
+  // Pay method toggle
+  ov.querySelector('#ck-pay-g').addEventListener('click', function(e) {
+    const btn = e.target.closest('.po'); if (!btn) return;
+    payMethod = btn.dataset.pay;
+    ov.querySelectorAll('.po').forEach(b => b.classList.remove('on'));
+    btn.classList.add('on');
+    const cw = ov.querySelector('#ck-change-wrap');
+    if (cw) cw.style.display = payMethod === '現金' ? '' : 'none';
+  });
+
+  // Update totals when discount changes
+  function updateTotals() {
+    const dp = ov.querySelector('#ck-disc-pct');
+    const df = ov.querySelector('#ck-disc-fix');
+    discount    = Math.min(100, Math.max(0, +(dp?.value)||0));
+    discountFix = Math.max(0, +(df?.value)||0);
+    const newD   = Math.round(sub*(discount/100));
+    curTot = Math.max(0, sub - newD - discountFix - ptDeduct);
+    const td = ov.querySelector('#ck-tot-disp');
+    if (td) td.textContent = fm(curTot);
+    const ca = ov.querySelector('#ck-confirm-amt');
+    if (ca) ca.textContent = fm(curTot);
+    renderCartTotals();
+  }
+  ov.querySelector('#ck-disc-pct')?.addEventListener('input', updateTotals);
+  ov.querySelector('#ck-disc-fix')?.addEventListener('input', updateTotals);
+
+  // Cash change
+  ov.querySelector('#ck-cash-paid')?.addEventListener('input', function() {
+    const paid = +this.value || 0;
+    const cd = ov.querySelector('#ck-change-display');
+    const ca = ov.querySelector('#ck-change-amt');
+    if (cd && ca && paid > 0) {
+      cd.style.display = 'flex';
+      const change = paid - curTot;
+      ca.textContent = change >= 0 ? fm(change) : '不足 ' + fm(Math.abs(change));
+      ca.style.color = change >= 0 ? 'var(--cr)' : '#b71c1c';
+    } else if (cd) { cd.style.display = 'none'; }
+  });
+
+  // Confirm
+  ov.querySelector('#ck-confirm').addEventListener('click', () => {
+    const note    = (ov.querySelector('#ck-note')?.value || '').trim();
+    const cashPaid = payMethod==='現金' ? (+(ov.querySelector('#ck-cash-paid')?.value)||0) : 0;
+    close();
+    doCheckout(note, cashPaid);
+  });
+}
+
+
+function doCheckout(orderNote, cashPaid) {
   if (!cart.length) return;
   const sub  = cart.reduce((s,x) => s+x.price*x.qty, 0);
   const dAmt = Math.round(sub * (discount/100));
@@ -1349,10 +1360,10 @@ function doCheckout() {
   const tot  = Math.max(0, sub - dAmt - discountFix - ptDeduct);
   const customer = cartMember ? cartMember.name : '散客';
   const memberId = cartMember ? cartMember.id : null;
-  const noteEl = ge('order-note');
-  const orderNote = noteEl ? noteEl.value.trim() : '';
-  const cashPaid = payMethod==='現金' ? (+ge('cash-paid')?.value||0) : 0;
-  const changeAmt = cashPaid > 0 ? Math.max(0, cashPaid - tot) : 0;
+  // note and cashPaid passed from openCheckoutModal
+  orderNote = orderNote || '';
+  cashPaid = cashPaid || 0;
+  const changeAmt = (payMethod==='現金' && cashPaid > 0) ? Math.max(0, cashPaid - tot) : 0;
   const order = {
     id: genId(), date: today(), customer, memberId,
     items: cart.map(x => ({name:x.name,qty:x.qty,price:x.price,cat:x.cat,owner:x.owner,spec:x.spec||'',refunded:false})),
@@ -2150,7 +2161,6 @@ PF.reports = function() {
         {lbl:'低庫存商品', val:lowCount,        sub:'件需補貨'}
       ].map(s=>'<div class="sc"><div class="sc-acc"></div><div class="sc-lbl">'+s.lbl+'</div><div class="sc-val">'+s.val+'</div><div class="sc-sub">'+s.sub+'</div></div>').join('') +
     '</div>' +
-    // ── 累計 3 卡 ──
     '<div style="margin-bottom:6px;font-size:11.5px;font-weight:700;color:var(--txt3);letter-spacing:.5px">累計（全部時間）</div>' +
     '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin-bottom:20px">' +
       [
@@ -2278,7 +2288,6 @@ PF.split = function() {
       ? '<div style="background:var(--p2);border:1.5px solid var(--p3);border-radius:var(--r);padding:10px 16px;margin-bottom:14px;display:flex;align-items:center;gap:10px;font-size:13px">⚖ <strong>均攤模式</strong>：總實收對半平分，成本各自負擔，計算每人應得金額與補貼方向。</div>'
       : '') +
 
-    // ── 個人統計卡 ──
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:13px;margin-bottom:16px">' +
       '<div class="sc" style="border-top:3px solid var(--wooly)">' +
         '<div class="sc-lbl" style="color:var(--wooly);font-weight:700">'+o1+(splitMode==='equal'?' 商品實收':' 實收')+'</div>' +
@@ -2294,7 +2303,6 @@ PF.split = function() {
       '</div>' +
     '</div>' +
 
-    // ── 均攤結算卡（僅均攤模式）──
     (splitMode==='equal'
       ? '<div class="card" style="margin-bottom:16px;border:2px solid var(--p3)">' +
           '<div class="card-hd"><span class="card-ttl">⚖ 均攤結算</span><span style="font-size:11px;color:var(--txt3);font-weight:400">總實收 '+fm(total)+' ÷ 2 = 各 '+fm(half)+'</span></div>' +
@@ -2313,7 +2321,6 @@ PF.split = function() {
                 '<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;border-top:1px solid var(--p3);padding-top:6px;margin-top:6px"><span>均攤後利潤</span><span style="font-family:var(--en);color:'+(mEqual.profit>=0?'var(--cr)':'#c0392b')+'">'+fm(mEqual.profit)+'</span></div>' +
               '</div>' +
             '</div>' +
-            // 補貼方向
             '<div style="background:'+(Math.abs(diff)===0?'#e9f5ea':'#fff8e6')+';border:1px solid '+(Math.abs(diff)===0?'#b8dcb9':'#ffe08a')+';border-radius:var(--r);padding:10px 16px;font-size:13px;text-align:center">' +
               (Math.abs(diff)===0
                 ? '✅ 兩人收入相等，無需補貼'
@@ -2325,7 +2332,6 @@ PF.split = function() {
         '</div>'
       : '') +
 
-    // ── 比例卡 ──
     '<div class="card" style="margin-bottom:16px"><div class="card-hd"><span class="card-ttl">整體分帳比例</span><span style="font-size:11px;color:var(--txt3);font-weight:400">（折扣已按比例分攤）</span></div><div style="padding:18px 20px">' +
       '<div style="height:28px;border-radius:6px;overflow:hidden;display:flex;margin-bottom:12px">' +
         '<div style="width:'+wPct+'%;background:var(--wooly);display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;font-family:var(--en)">'+wPct+'%</div>' +
@@ -2339,7 +2345,6 @@ PF.split = function() {
       '</div>' +
     '</div></div>' +
 
-    // ── 商品明細表 ──
     '<div class="card"><div class="card-hd"><span class="card-ttl">各商品分帳明細</span></div><div class="tw"><table>' +
       '<thead><tr><th>商品名稱</th><th>歸屬闆娘</th><th>數量</th><th>原始金額</th><th>實收金額</th>' +
       (splitMode==='equal' ? '<th>各人均攤</th>' : '<th>佔比</th>') +
@@ -2594,7 +2599,6 @@ PF.settings = function() {
   ge('tb-act').innerHTML = '';
   ge('pg').innerHTML =
     '<div style="max-width:820px">' +
-    // ── Shop Info Card ──
     '<div class="card" style="margin-bottom:20px">' +
       '<div class="card-hd"><span class="card-ttl">店家資訊設定</span></div>' +
       '<div style="padding:18px 20px">' +
@@ -2619,7 +2623,6 @@ PF.settings = function() {
       '<button class="btn btn-o" id="add-tier-btn" style="margin-top:14px">' + IC.plus + ' 新增等級</button>' +
     '</div>' +
 
-    // ── 闆娘名稱卡片 ──
     '<div class="card" style="margin-bottom:20px;max-width:820px">' +
       '<div class="card-hd"><span class="card-ttl">👤 闆娘名稱設定</span></div>' +
       '<div style="padding:18px 20px">' +
@@ -2637,7 +2640,6 @@ PF.settings = function() {
       '</div>' +
     '</div>' +
 
-    // ── 點數設定卡片 ──
     '<div class="card" style="margin-top:20px;max-width:820px">' +
       '<div class="card-hd"><span class="card-ttl">⭐ 點數使用設定</span></div>' +
       '<div style="padding:18px 20px">' +
@@ -2674,7 +2676,6 @@ PF.settings = function() {
       '</div>' +
     '</div>' +
 
-    // ── 系統安全卡片 ──
     '<div class="card" style="margin-top:20px;max-width:820px">' +
       '<div class="card-hd"><span class="card-ttl">🔒 系統安全</span></div>' +
       '<div style="padding:18px 20px">' +
@@ -2872,6 +2873,314 @@ function updateCardStyle(tid, wrap) {
 // ══════════════════════════════════════
 // DATA MANAGEMENT PAGE
 // ══════════════════════════════════════
+PF.sellship = function() {
+  ge('tb-act').innerHTML = '';
+  ge('pg').innerHTML =
+    '<div style="max-width:860px">' +
+      '<div class="alw alw-g" style="margin-bottom:20px">' +
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' +
+        '<div>上傳賣貨便匯出的 <strong>.xlsx</strong> 檔案，系統將自動解析並匯入訂單，計入月結報表。<br>兩個工作表（非訂單匯入、訂單匯入）皆支援，取消的訂單會自動略過。</div>' +
+      '</div>' +
+      '<div class="card" style="margin-bottom:20px">' +
+        '<div class="card-hd"><span class="card-ttl">📦 匯入賣貨便訂單</span></div>' +
+        '<div style="padding:18px 20px">' +
+          '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px">' +
+            '<label class="btn btn-p" style="cursor:pointer">選擇 .xlsx 檔案<input type="file" id="ss-file" accept=".xlsx,.csv" style="display:none"></label>' +
+            '<span id="ss-filename" style="font-size:12px;color:var(--txt3)">尚未選取檔案</span>' +
+          '</div>' +
+          '<div id="ss-preview" style="display:none"></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="card" id="ss-report-card">' +
+        '<div class="card-hd"><span class="card-ttl">📊 月結匯總報表</span><button class="btn btn-o btn-sm" id="ss-export-btn">匯出 CSV</button></div>' +
+        '<div style="padding:16px 20px" id="ss-report-body">' +
+          renderSellShipReport() +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+  ge('ss-file').addEventListener('change', function() {
+    const file = this.files[0];
+    if (!file) return;
+    ge('ss-filename').textContent = file.name;
+    parseSellShipFile(file);
+    this.value = '';
+  });
+
+  ge('ss-export-btn').addEventListener('click', exportSellShipCSV);
+};
+
+function parseSellShipFile(file) {
+  showToast('正在解析 Excel 檔案...');
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      if (typeof XLSX === 'undefined') {
+        showToast('試算表套件尚未載入，請稍後再試');
+        return;
+      }
+      const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      // Try '非訂單匯入' sheet first, fallback to '訂單匯入', then first sheet
+      let sheetName = wb.SheetNames.includes('非訂單匯入') ? '非訂單匯入'
+                    : wb.SheetNames.includes('訂單匯入')   ? '訂單匯入'
+                    : wb.SheetNames[0];
+      const ws = wb.Sheets[sheetName];
+      // Convert to array of arrays
+      const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null});
+      parseSellShipRows(rows);
+    } catch(err) {
+      showToast('解析失敗：' + err.message);
+      console.error(err);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function parseSellShipRows(rows) {
+  // Find header row (has 訂單編號)
+  let headerIdx = -1;
+  let headers = [];
+  for (let i = 0; i < Math.min(10, rows.length); i++) {
+    const row = rows[i];
+    if (row && row.some(v => v && String(v).includes('訂單編號'))) {
+      headerIdx = i;
+      headers = row.map(v => v ? String(v).replace(/\n/g,'').trim() : '');
+      break;
+    }
+  }
+  if (headerIdx < 0) { showToast('找不到標題列，請確認是賣貨便匯出格式'); return; }
+
+  // Column indices
+  const COL = {
+    shopType: headers.indexOf('賣場類型'),
+    shopName: Math.max(headers.indexOf('賣場名稱'), headers.indexOf('賣場名稱')),
+    date:     headers.indexOf('訂購日期'),
+    orderId:  headers.indexOf('訂單編號'),
+    status:   headers.indexOf('狀態'),
+    buyer:    headers.indexOf('收件人姓名'),
+    payment:  headers.indexOf('付款方式'),
+    itemName: Math.max(headers.findIndex(h => h.includes('商品名稱')), 0),
+    unitPrice:headers.indexOf('單價'),
+    qty:      headers.indexOf('數量'),
+    subtotal: headers.findIndex(h => h.includes('小計')),
+    shipping: headers.findIndex(h => h.includes('運費')),
+    total:    headers.findIndex(h => h.includes('商品總額')),
+  };
+
+  // Parse data rows
+  const ordersMap = {};
+  let curOrder = null;
+  let imported = 0, skipped = 0;
+
+  function cellStr(v) { return v != null ? String(v).replace(/\n/g,' ').trim() : ''; }
+  function cellNum(v) { return parseFloat(String(v||0).replace(/,/g,'')) || 0; }
+  function parseDate(v) {
+    if (!v) return '';
+    const s = String(v);
+    // Excel date number
+    if (/^\d+$/.test(s)) {
+      const d = new Date(Math.round((+s - 25569) * 86400 * 1000));
+      return d.toISOString().slice(0,10);
+    }
+    // 2026/07/26 or 2026-07-26
+    return s.replace(/\//g,'-').slice(0,10);
+  }
+
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || row.every(v => v == null)) continue;
+
+    const orderId = cellStr(row[COL.orderId]);
+    const status  = cellStr(row[COL.status]).split('(')[0].trim();
+
+    // Skip cancelled orders
+    if (status.includes('取消')) { skipped++; continue; }
+
+    if (orderId && orderId.startsWith('CM')) {
+      // New order row
+      const shopName = cellStr(row[Math.max(COL.shopName,1)]);
+      curOrder = {
+        id: 'SS-' + orderId,
+        sourceId: orderId,
+        date: parseDate(row[COL.date]),
+        shopName: shopName,
+        buyer: cellStr(row[COL.buyer]),
+        payment: cellStr(row[COL.payment]).split('\n')[0].trim(),
+        status: status,
+        items: [],
+        subtotal: cellNum(row[COL.subtotal]),
+        shipping: cellNum(row[COL.shipping]),
+        total:    cellNum(row[COL.total]) || cellNum(row[COL.subtotal]),
+        netRevenue: (() => {
+          const tot = cellNum(row[COL.total]) || cellNum(row[COL.subtotal]);
+          return tot - 38;
+        })(),
+        source: '賣貨便',
+      };
+      ordersMap[orderId] = curOrder;
+      imported++;
+    }
+
+    // Add item (works for both main row and continuation rows)
+    if (curOrder) {
+      const itemName = cellStr(row[COL.itemName]);
+      const qty   = parseInt(row[COL.qty]) || 0;
+      const price = cellNum(row[COL.unitPrice]);
+      if (itemName) {
+        curOrder.items.push({ name: itemName, qty, price });
+      }
+    }
+  }
+
+  const newOrders = Object.values(ordersMap);
+  
+  if (newOrders.length === 0) {
+    showToast('未找到有效訂單');
+    return;
+  }
+
+  // Show preview
+  const preview = ge('ss-preview');
+  if (preview) {
+    preview.style.display = 'block';
+    const valid = newOrders.filter(o => !o.status.includes('取消'));
+    const totalRev = valid.reduce((s,o) => s + (o.netRevenue != null ? o.netRevenue : (o.total || o.subtotal)), 0);
+    preview.innerHTML =
+      '<div style="background:var(--p2);border-radius:var(--r);padding:14px 16px;margin-bottom:12px">' +
+        '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">' +
+          '<div><div style="font-size:11px;color:var(--txt3)">找到訂單</div><div style="font-family:var(--en);font-size:22px;font-weight:700;color:var(--ink)">' + newOrders.length + '</div></div>' +
+          '<div><div style="font-size:11px;color:var(--txt3)">實收金額合計</div><div style="font-family:var(--en);font-size:22px;font-weight:700;color:var(--cr)">' + fm(totalRev) + '</div></div>' +
+          '<div><div style="font-size:11px;color:var(--txt3)">已略過（取消）</div><div style="font-family:var(--en);font-size:22px;font-weight:700;color:var(--txt3)">' + skipped + '</div></div>' +
+        '<div style="font-size:11px;color:var(--txt3);margin-top:8px">⚠ 實收 = 商品總額 − $38 × 訂單數（每筆訂單均扣除運費成本）</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="max-height:240px;overflow-y:auto;border:1.5px solid var(--p3);border-radius:var(--r);margin-bottom:12px">' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
+          '<thead><tr style="background:var(--p);border-bottom:2px solid var(--cr)"><th style="padding:8px 12px;text-align:left;color:var(--cr);font-size:11px">訂單編號</th><th style="padding:8px 12px;text-align:left;color:var(--cr);font-size:11px">日期</th><th style="padding:8px 12px;text-align:left;color:var(--cr);font-size:11px">賣場</th><th style="padding:8px 12px;text-align:left;color:var(--cr);font-size:11px">買家</th><th style="padding:8px 12px;text-align:left;color:var(--cr);font-size:11px">狀態</th><th style="padding:8px 12px;text-align:right;color:var(--cr);font-size:11px">小計</th></tr></thead>' +
+          '<tbody>' +
+            newOrders.map(o =>
+              '<tr style="border-bottom:1px solid var(--p2)">' +
+                '<td style="padding:7px 12px;font-family:var(--en);font-size:11px;color:var(--txt3)">' + o.sourceId + '</td>' +
+                '<td style="padding:7px 12px">' + o.date + '</td>' +
+                '<td style="padding:7px 12px;font-size:11px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + o.shopName + '</td>' +
+                '<td style="padding:7px 12px">' + o.buyer + '</td>' +
+                '<td style="padding:7px 12px"><span class="bdg ' + (o.status.includes('已取件')?'bg':o.status.includes('已送達')?'bb':o.status.includes('訂單成立')?'ba':'bi') + '" style="font-size:10px">' + o.status + '</span></td>' +
+                '<td style="padding:7px 12px;font-family:var(--en);font-weight:600;text-align:right">' + fm(o.netRevenue != null ? o.netRevenue : (o.total || o.subtotal)) + '</td>' +
+              '</tr>'
+            ).join('') +
+          '</tbody>' +
+        '</table>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px">' +
+        '<button class="btn btn-p" id="ss-import-confirm">確認匯入 ' + newOrders.length + ' 筆</button>' +
+        '<button class="btn btn-o" id="ss-import-cancel">取消</button>' +
+      '</div>';
+
+    ge('ss-import-confirm').addEventListener('click', () => {
+      // Merge: skip duplicates by sourceId
+      const existingIds = new Set(externalOrders.map(o => o.sourceId));
+      const toAdd = newOrders.filter(o => !existingIds.has(o.sourceId));
+      externalOrders = [...externalOrders, ...toAdd];
+      saveToLocal();
+      showToast('已匯入 ' + toAdd.length + ' 筆賣貨便訂單' + (toAdd.length < newOrders.length ? '（' + (newOrders.length - toAdd.length) + ' 筆重複略過）' : ''));
+      PF.sellship();
+    });
+
+    ge('ss-import-cancel').addEventListener('click', () => {
+      preview.style.display = 'none';
+    });
+  }
+}
+
+function renderSellShipReport() {
+  if (!externalOrders.length) {
+    return '<div style="text-align:center;padding:32px;color:var(--txt3);font-size:13px">尚未匯入任何賣貨便訂單<br><span style="font-size:11px">匯入後將顯示月結匯總</span></div>';
+  }
+
+  const posOrders = orders.filter(o => o.status === '完成');
+  const extOrders = externalOrders;
+
+  // Group by month
+  const months = {};
+  [...posOrders.map(o=>({...o, _src:'門市'})), ...extOrders.map(o=>({...o, _src:'賣貨便'}))].forEach(o => {
+    const m = (o.date||'').slice(0,7);
+    if (!m) return;
+    if (!months[m]) months[m] = {pos:0,ext:0,extGross:0,extShipping:0,posCount:0,extCount:0};
+    if (o._src==='門市') { months[m].pos += o.total||0; months[m].posCount++; }
+    else {
+      const gross = o.total || o.subtotal || 0;
+      const net   = o.netRevenue != null ? o.netRevenue : gross - 38;
+      months[m].extGross    += gross;
+      months[m].extShipping += 38;
+      months[m].ext         += net;
+      months[m].extCount++;
+    }
+  });
+
+  const sortedMonths = Object.keys(months).sort().reverse();
+  
+  if (!sortedMonths.length) return '<div style="padding:20px;color:var(--txt3)">無資料</div>';
+
+  // Shop name breakdown for external orders
+  const shopBreak = {};
+  extOrders.forEach(o => {
+    const shop = o.shopName || '未知賣場';
+    if (!shopBreak[shop]) shopBreak[shop] = {count:0, total:0};
+    shopBreak[shop].count++;
+    shopBreak[shop].total += (o.netRevenue != null ? o.netRevenue : (o.total || o.subtotal)) || 0;
+  });
+
+  return sortedMonths.map(m => {
+    const d = months[m];
+    const grandTotal = d.pos + d.ext; // ext is already net (after shipping deduction)
+    const extPct = grandTotal ? Math.round(d.ext/grandTotal*100) : 0;
+    const posPct = 100 - extPct;
+    return (
+      '<div style="margin-bottom:24px">' +
+        '<div style="font-size:14px;font-weight:700;color:var(--ink);margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid var(--cr)">' + m + ' 月結匯總</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">' +
+          '<div class="sc" style="padding:14px"><div class="sc-acc"></div><div class="sc-lbl">門市營業額</div><div class="sc-val">' + fm(d.pos) + '</div><div class="sc-sub">' + d.posCount + ' 筆訂單</div></div>' +
+          '<div class="sc" style="padding:14px"><div class="sc-acc" style="background:var(--mumu)"></div><div class="sc-lbl">賣貨便商品總額</div><div class="sc-val">' + fm(d.extGross) + '</div><div class="sc-sub">' + d.extCount + ' 筆訂單</div></div>' +
+          '<div class="sc" style="padding:14px"><div class="sc-acc" style="background:#e57373"></div><div class="sc-lbl">運費成本</div><div class="sc-val" style="color:#b71c1c">−' + fm(d.extShipping) + '</div><div class="sc-sub">' + d.extCount + ' 筆 × $38</div></div>' +
+          '<div class="sc" style="padding:14px"><div class="sc-acc" style="background:var(--gold)"></div><div class="sc-lbl">實際獲利</div><div class="sc-val" style="color:var(--cr)">' + fm(grandTotal) + '</div><div class="sc-sub">門市 + 賣貨便淨收</div></div>' +
+        '</div>' +
+        '<div style="margin-bottom:10px">' +
+          '<div style="font-size:11px;color:var(--txt3);margin-bottom:5px">通路佔比</div>' +
+          '<div style="display:flex;height:10px;border-radius:6px;overflow:hidden">' +
+            '<div style="width:' + posPct + '%;background:var(--cr)" title="門市 ' + posPct + '%"></div>' +
+            '<div style="flex:1;background:var(--mumu)" title="賣貨便 ' + extPct + '%"></div>' +
+          '</div>' +
+          '<div style="display:flex;gap:16px;margin-top:6px;font-size:11.5px">' +
+            '<span style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:50%;background:var(--cr);display:inline-block"></span>門市 ' + posPct + '%</span>' +
+            '<span style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:50%;background:var(--mumu);display:inline-block"></span>賣貨便 ' + extPct + '%</span>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }).join('') +
+  (Object.keys(shopBreak).length > 0 ?
+    '<div style="margin-top:4px"><div style="font-size:13px;font-weight:700;color:var(--ink);margin-bottom:10px">賣場別明細（全期）</div>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:13px">' +
+        '<thead><tr style="background:var(--p);border-bottom:2px solid var(--cr)"><th style="padding:8px 13px;text-align:left;color:var(--cr);font-size:11px">賣場名稱</th><th style="padding:8px 13px;text-align:left;color:var(--cr);font-size:11px">訂單數</th><th style="padding:8px 13px;text-align:right;color:var(--cr);font-size:11px">商品小計</th></tr></thead>' +
+        '<tbody>' +
+          Object.entries(shopBreak).sort((a,b)=>b[1].total-a[1].total).map(([shop,d]) =>
+            '<tr style="border-bottom:1px solid var(--p2)"><td style="padding:9px 13px;font-weight:500">' + shop + '</td><td style="padding:9px 13px;font-family:var(--en)">' + d.count + '</td><td style="padding:9px 13px;font-family:var(--en);font-weight:600;text-align:right">' + fm(d.total) + '</td></tr>'
+          ).join('') +
+        '</tbody>' +
+      '</table>' +
+    '</div>'
+  : '');
+}
+
+function exportSellShipCSV() {
+  const posOrders = orders.filter(o => o.status === '完成');
+  const allRows = [
+    ...posOrders.map(o => ['門市', o.date, o.id, o.customer, o.payment, o.total, '']),
+    ...externalOrders.map(o => ['賣貨便', o.date, o.sourceId, o.buyer, o.payment, (o.netRevenue != null ? o.netRevenue : (o.total || o.subtotal)), o.shopName]),
+  ].sort((a,b) => b[1].localeCompare(a[1]));
+  exportCSV('WM熊窩_月結報表_' + today() + '.csv', allRows, ['來源','日期','訂單編號','客戶/買家','付款方式','商品金額','賣場名稱']);
+}
+
 PF.datamanage = function() {
   ge('tb-act').innerHTML = '';
   const lsRaw = localStorage.getItem(STORAGE_KEY);
@@ -2889,7 +3198,6 @@ PF.datamanage = function() {
   ge('pg').innerHTML =
     '<div style="max-width:700px">' +
 
-    // ── Status Banner ──
     '<div class="card" style="margin-bottom:20px">' +
       '<div class="card-hd"><span class="card-ttl">資料儲存狀態</span></div>' +
       '<div style="padding:18px 20px">' +
@@ -2910,7 +3218,6 @@ PF.datamanage = function() {
       '</div>' +
     '</div>' +
 
-    // ── Auto Save ──
     '<div class="card" style="margin-bottom:20px">' +
       '<div class="card-hd"><span class="card-ttl">自動儲存</span></div>' +
       '<div style="padding:18px 20px">' +
@@ -2922,7 +3229,6 @@ PF.datamanage = function() {
       '</div>' +
     '</div>' +
 
-    // ── Export Backup ──
     '<div class="card" style="margin-bottom:20px">' +
       '<div class="card-hd"><span class="card-ttl">匯出備份（建議每週一次）</span></div>' +
       '<div style="padding:18px 20px">' +
@@ -2931,7 +3237,6 @@ PF.datamanage = function() {
       '</div>' +
     '</div>' +
 
-    // ── Import Restore ──
     '<div class="card" style="margin-bottom:20px">' +
       '<div class="card-hd"><span class="card-ttl">從備份還原</span></div>' +
       '<div style="padding:18px 20px">' +
@@ -2943,7 +3248,6 @@ PF.datamanage = function() {
       '</div>' +
     '</div>' +
 
-    // ── Tips ──
     '<div class="card">' +
       '<div class="card-hd"><span class="card-ttl">資料安全建議</span></div>' +
       '<div style="padding:16px 20px">' +
@@ -3111,7 +3415,7 @@ const STORAGE_KEY = 'woolybear_data_v1';
 function saveToLocal() {
   try {
     const data = {
-      products, members, orders, employees,
+      products, members, orders, externalOrders, employees,
       tierConfig, shopConfig, restockLog,
       savedAt: new Date().toISOString(),
     };
@@ -3148,10 +3452,10 @@ function loadFromLocal() {
 
 function exportBackup() {
   const data = {
-    _version: '1.0',
+    _version: '1.1',
     _app: 'WoolyBear POS',
     _exportedAt: new Date().toISOString(),
-    products, members, orders, employees, tierConfig, shopConfig, restockLog,
+    products, members, orders, externalOrders, employees, tierConfig, shopConfig, restockLog,
   };
   const json = JSON.stringify(data, null, 2);
   const BOM  = '﻿';
@@ -3270,12 +3574,18 @@ const _origCheckout = doCheckout;
   loadFromLocal();
   PF.pos();
 
-  // 再從 Firebase 載入最新資料
-  const loaded = await loadFromFB();
-  startRealtimeSync();
-  PF.pos(); // 重新渲染
-  if (loaded) {
-    setTimeout(() => showToast('☁ 資料已從雲端同步'), 500);
+  // 再從 Firebase 載入最新資料（Firebase 不可用時略過）
+  if (db) {
+    try {
+      const loaded = await loadFromFB();
+      startRealtimeSync();
+      PF.pos();
+      if (loaded) {
+        setTimeout(() => showToast('☁ 資料已從雲端同步'), 500);
+      }
+    } catch(e) {
+      console.warn('Firebase 同步失敗，使用本地資料:', e);
+    }
   }
 })();
 </script>
