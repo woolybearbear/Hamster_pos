@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>熊窩研究所 POS</title>
+<title>W&M 熊窩專門店 POS</title>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -409,9 +409,7 @@ input[type=checkbox]{accent-color:var(--cr);width:15px;height:15px;cursor:pointe
 .cb-td{width:36px;min-width:36px;text-align:center;padding:8px 6px!important}
 </style>
   <!-- Firebase SDK -->
-  <script type="module">
-    // 這段 script 會在主腳本後執行，初始化 Firebase
-  </script>
+  
   <!-- Firebase compat SDK（讓 HTML 單檔也能用）-->
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
@@ -2951,7 +2949,7 @@ PF.sellship = function() {
         '<div class="card-hd"><span class="card-ttl">📦 匯入賣貨便訂單</span></div>' +
         '<div style="padding:18px 20px">' +
           '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px">' +
-            '<label class="btn btn-p" style="cursor:pointer">選擇 .csv 檔案<input type="file" id="ss-file" accept=".csv" style="display:none"></label>' +
+            '<label class="btn btn-p" style="cursor:pointer">選擇 .xlsx 檔案<input type="file" id="ss-file" accept=".xlsx,.csv" style="display:none"></label>' +
             '<span id="ss-filename" style="font-size:12px;color:var(--txt3)">尚未選取檔案</span>' +
           '</div>' +
           '<div id="ss-preview" style="display:none"></div>' +
@@ -3003,68 +3001,61 @@ function parseSellShipFile(file) {
 }
 
 function parseSellShipRows(rows) {
-  // Find header row (has 訂單編號)
-  let headerIdx = -1;
-  let headers = [];
-  for (let i = 0; i < Math.min(10, rows.length); i++) {
-    const row = rows[i];
-    if (row && row.some(v => v && String(v).includes('訂單編號'))) {
+  var headerIdx = -1;
+  var headers = [];
+  for (var i = 0; i < Math.min(10, rows.length); i++) {
+    var row = rows[i];
+    if (row && row.some(function(v){ return v && String(v).includes('\u8a02\u55ae\u7de8\u865f'); })) {
       headerIdx = i;
-      headers = row.map(v => v ? String(v).replace(/\n/g,'').trim() : '');
+      headers = row.map(function(v){ return v ? String(v).replace(/\n/g,'').trim() : ''; });
       break;
     }
   }
-  if (headerIdx < 0) { showToast('找不到標題列，請確認是賣貨便匯出格式'); return; }
+  if (headerIdx < 0) { showToast('\u627e\u4e0d\u5230\u6a19\u984c\u5217\uff0c\u8acb\u78ba\u8a8d\u662f\u8ce3\u8ca8\u4fbf\u532f\u51fa\u683c\u5f0f'); return; }
 
-  // Column indices
-  const COL = {
-    shopType: headers.indexOf('賣場類型'),
-    shopName: Math.max(headers.indexOf('賣場名稱'), headers.indexOf('賣場名稱')),
-    date:     headers.indexOf('訂購日期'),
-    orderId:  headers.indexOf('訂單編號'),
-    status:   headers.indexOf('狀態'),
-    buyer:    headers.indexOf('收件人姓名'),
-    payment:  headers.indexOf('付款方式'),
-    itemName: Math.max(headers.findIndex(h => h.includes('商品名稱')), 0),
-    unitPrice:headers.indexOf('單價'),
-    qty:      headers.indexOf('數量'),
-    subtotal: headers.findIndex(h => h.includes('小計')),
-    shipping: headers.findIndex(h => h.includes('運費')),
-    total:    headers.findIndex(h => h.includes('商品總額')),
+  var COL = {
+    shopName: Math.max(headers.indexOf('\u8ce3\u5834\u540d\u7a31'), 1),
+    date:     headers.indexOf('\u8a02\u8cfc\u65e5\u671f'),
+    orderId:  headers.indexOf('\u8a02\u55ae\u7de8\u865f'),
+    status:   headers.indexOf('\u72c0\u614b'),
+    buyer:    headers.indexOf('\u6536\u4ef6\u4eba\u59d3\u540d'),
+    payment:  headers.indexOf('\u4ed8\u6b3e\u65b9\u5f0f'),
+    itemName: Math.max(headers.findIndex(function(h){ return h.includes('\u5546\u54c1\u540d\u7a31'); }), 0),
+    unitPrice:headers.indexOf('\u55ae\u50f9'),
+    qty:      headers.indexOf('\u6578\u91cf'),
+    subtotal: headers.findIndex(function(h){ return h.includes('\u5c0f\u8a08'); }),
+    shipping: headers.findIndex(function(h){ return h.includes('\u904b\u8cbb'); }),
+    total:    headers.findIndex(function(h){ return h.includes('\u5546\u54c1\u7e3d\u984d'); }),
   };
 
-  // Parse data rows
-  const ordersMap = {};
-  let curOrder = null;
-  let imported = 0, skipped = 0;
+  var ordersMap = {};
+  var curOrder = null;
+  var imported = 0, skipped = 0;
 
   function cellStr(v) { return v != null ? String(v).replace(/\n/g,' ').trim() : ''; }
   function cellNum(v) { return parseFloat(String(v||0).replace(/,/g,'')) || 0; }
   function parseDate(v) {
     if (!v) return '';
-    const s = String(v);
-    // Excel date number
+    var s = String(v);
     if (/^\d+$/.test(s)) {
-      const d = new Date(Math.round((+s - 25569) * 86400 * 1000));
+      var d = new Date(Math.round((+s - 25569) * 86400 * 1000));
       return d.toISOString().slice(0,10);
     }
-    // 2026/07/26 or 2026-07-26
     return s.replace(/\//g,'-').slice(0,10);
   }
 
-  for (let i = headerIdx + 1; i < rows.length; i++) {
-    const row = rows[i];
-    if (!row || row.every(v => v == null)) continue;
+  for (var j = headerIdx + 1; j < rows.length; j++) {
+    var row = rows[j];
+    if (!row || row.every(function(v){ return v == null; })) continue;
 
-    const orderId = cellStr(row[COL.orderId]);
-    const status  = cellStr(row[COL.status]).split('(')[0].trim();
+    var orderId = cellStr(row[COL.orderId]);
+    var status  = cellStr(row[COL.status]).split('(')[0].trim();
 
-    // Skip cancelled orders
-    if (status.includes('取消')) { skipped++; continue; }
+    if (status.includes('\u53d6\u6d88')) { skipped++; continue; }
 
     if (orderId && orderId.startsWith('CM')) {
-      // New order row
-      const shopName = cellStr(row[Math.max(COL.shopName,1)]);
+      var shopName = cellStr(row[Math.max(COL.shopName,1)]);
+      var tot = cellNum(row[COL.total]) || cellNum(row[COL.subtotal]);
       curOrder = {
         id: 'SS-' + orderId,
         sourceId: orderId,
@@ -3076,86 +3067,88 @@ function parseSellShipRows(rows) {
         items: [],
         subtotal: cellNum(row[COL.subtotal]),
         shipping: cellNum(row[COL.shipping]),
-        total:    cellNum(row[COL.total]) || cellNum(row[COL.subtotal]),
-        netRevenue: (() => {
-          const tot = cellNum(row[COL.total]) || cellNum(row[COL.subtotal]);
-          return tot - 38;
-        })(),
-        source: '賣貨便',
+        total: tot,
+        netRevenue: tot - 38,
+        source: '\u8ce3\u8ca8\u4fbf',
       };
       ordersMap[orderId] = curOrder;
       imported++;
     }
 
-    // Add item (works for both main row and continuation rows)
     if (curOrder) {
-      const itemName = cellStr(row[COL.itemName]);
-      const qty   = parseInt(row[COL.qty]) || 0;
-      const price = cellNum(row[COL.unitPrice]);
+      var itemName = cellStr(row[COL.itemName]);
+      var qty = parseInt(row[COL.qty]) || 0;
+      var price = cellNum(row[COL.unitPrice]);
       if (itemName) {
-        curOrder.items.push({ name: itemName, qty, price });
+        curOrder.items.push({ name: itemName, qty: qty, price: price });
       }
     }
   }
 
-  const newOrders = Object.values(ordersMap);
-  
-  if (newOrders.length === 0) {
-    showToast('未找到有效訂單');
-    return;
-  }
+  var newOrders = Object.values(ordersMap);
+  if (newOrders.length === 0) { showToast('\u672a\u627e\u5230\u6709\u6548\u8a02\u55ae'); return; }
 
-  // Show preview
-  const preview = ge('ss-preview');
-  if (preview) {
-    preview.style.display = 'block';
-    const valid = newOrders.filter(o => !o.status.includes('取消'));
-    const totalRev = valid.reduce((s,o) => s + (o.netRevenue != null ? o.netRevenue : (o.total || o.subtotal)), 0);
-    preview.innerHTML =
-      '<div style="background:var(--p2);border-radius:var(--r);padding:14px 16px;margin-bottom:12px">' +
-        '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">' +
-          '<div><div style="font-size:11px;color:var(--txt3)">找到訂單</div><div style="font-family:var(--en);font-size:22px;font-weight:700;color:var(--ink)">' + newOrders.length + '</div></div>' +
-          '<div><div style="font-size:11px;color:var(--txt3)">實收金額合計</div><div style="font-family:var(--en);font-size:22px;font-weight:700;color:var(--cr)">' + fm(totalRev) + '</div></div>' +
-          '<div><div style="font-size:11px;color:var(--txt3)">已略過（取消）</div><div style="font-family:var(--en);font-size:22px;font-weight:700;color:var(--txt3)">' + skipped + '</div></div>' +
-        '<div style="font-size:11px;color:var(--txt3);margin-top:8px">⚠ 實收 = 商品總額 − $38 × 訂單數（每筆訂單均扣除運費成本）</div>' +
-        '</div>' +
+  var preview = ge('ss-preview');
+  if (!preview) return;
+  preview.style.display = 'block';
+  var valid = newOrders.filter(function(o){ return !o.status.includes('\u53d6\u6d88'); });
+  var totalRev = valid.reduce(function(s,o){ return s + (o.netRevenue != null ? o.netRevenue : (o.total || o.subtotal)); }, 0);
+
+  var rows_html = newOrders.map(function(o) {
+    var cls = o.status.includes('\u5df2\u53d6\u4ef6') ? 'bg' : o.status.includes('\u5df2\u9001\u9054') ? 'bb' : o.status.includes('\u8a02\u55ae\u6210\u7acb') ? 'ba' : 'bi';
+    var amt = o.netRevenue != null ? o.netRevenue : (o.total || o.subtotal);
+    return '<tr style="border-bottom:1px solid var(--p2)">' +
+      '<td style="padding:7px 12px;font-family:var(--en);font-size:11px;color:var(--txt3)">' + o.sourceId + '</td>' +
+      '<td style="padding:7px 12px">' + o.date + '</td>' +
+      '<td style="padding:7px 12px;font-size:11px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + o.shopName + '</td>' +
+      '<td style="padding:7px 12px">' + o.buyer + '</td>' +
+      '<td style="padding:7px 12px"><span class="bdg ' + cls + '" style="font-size:10px">' + o.status + '</span></td>' +
+      '<td style="padding:7px 12px;font-family:var(--en);font-weight:600;text-align:right">' + fm(amt) + '</td>' +
+      '</tr>';
+  }).join('');
+
+  preview.innerHTML =
+    '<div style="background:var(--p2);border-radius:var(--r);padding:14px 16px;margin-bottom:12px">' +
+      '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">' +
+        '<div><div style="font-size:11px;color:var(--txt3)">\u627e\u5230\u8a02\u55ae</div><div style="font-family:var(--en);font-size:22px;font-weight:700;color:var(--ink)">' + newOrders.length + '</div></div>' +
+        '<div><div style="font-size:11px;color:var(--txt3)">\u5be6\u6536\u91d1\u984d\u5408\u8a08</div><div style="font-family:var(--en);font-size:22px;font-weight:700;color:var(--cr)">' + fm(totalRev) + '</div></div>' +
+        '<div><div style="font-size:11px;color:var(--txt3)">\u5df2\u7565\u904e\uff08\u53d6\u6d88\uff09</div><div style="font-family:var(--en);font-size:22px;font-weight:700;color:var(--txt3)">' + skipped + '</div></div>' +
       '</div>' +
-      '<div style="max-height:240px;overflow-y:auto;border:1.5px solid var(--p3);border-radius:var(--r);margin-bottom:12px">' +
-        '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
-          '<thead><tr style="background:var(--p);border-bottom:2px solid var(--cr)"><th style="padding:8px 12px;text-align:left;color:var(--cr);font-size:11px">訂單編號</th><th style="padding:8px 12px;text-align:left;color:var(--cr);font-size:11px">日期</th><th style="padding:8px 12px;text-align:left;color:var(--cr);font-size:11px">賣場</th><th style="padding:8px 12px;text-align:left;color:var(--cr);font-size:11px">買家</th><th style="padding:8px 12px;text-align:left;color:var(--cr);font-size:11px">狀態</th><th style="padding:8px 12px;text-align:right;color:var(--cr);font-size:11px">小計</th></tr></thead>' +
-          '<tbody>' +
-            newOrders.map(o =>
-              '<tr style="border-bottom:1px solid var(--p2)">' +
-                '<td style="padding:7px 12px;font-family:var(--en);font-size:11px;color:var(--txt3)">' + o.sourceId + '</td>' +
-                '<td style="padding:7px 12px">' + o.date + '</td>' +
-                '<td style="padding:7px 12px;font-size:11px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + o.shopName + '</td>' +
-                '<td style="padding:7px 12px">' + o.buyer + '</td>' +
-                '<td style="padding:7px 12px"><span class="bdg ' + (o.status.includes('已取件')?'bg':o.status.includes('已送達')?'bb':o.status.includes('訂單成立')?'ba':'bi') + '" style="font-size:10px">' + o.status + '</span></td>' +
-                '<td style="padding:7px 12px;font-family:var(--en);font-weight:600;text-align:right">' + fm(o.netRevenue != null ? o.netRevenue : (o.total || o.subtotal)) + '</td>' +
-              '</tr>'
-            ).join('') +
-          '</tbody>' +
-        '</table>' +
-      '</div>' +
-      '<div style="display:flex;gap:8px">' +
-        '<button class="btn btn-p" id="ss-import-confirm">確認匯入 ' + newOrders.length + ' 筆</button>' +
-        '<button class="btn btn-o" id="ss-import-cancel">取消</button>' +
-      '</div>';
+      '<div style="font-size:11px;color:var(--txt3);margin-top:8px">\u26a0 \u5be6\u6536 = \u5546\u54c1\u7e3d\u984d \u2212 $38 \xd7 \u8a02\u55ae\u6578\uff08\u6bcf\u7b46\u8a02\u55ae\u5747\u6263\u9664\u904b\u8cbb\u6210\u672c\uff09</div>' +
+    '</div>' +
+    '<div style="max-height:240px;overflow-y:auto;border:1.5px solid var(--p3);border-radius:var(--r);margin-bottom:12px">' +
+      '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
+        '<thead><tr style="background:var(--p);border-bottom:2px solid var(--cr)">' +
+          '<th style="padding:8px 12px;text-align:left;color:var(--cr);font-size:11px">\u8a02\u55ae\u7de8\u865f</th>' +
+          '<th style="padding:8px 12px;text-align:left;color:var(--cr);font-size:11px">\u65e5\u671f</th>' +
+          '<th style="padding:8px 12px;text-align:left;color:var(--cr);font-size:11px">\u8ce3\u5834</th>' +
+          '<th style="padding:8px 12px;text-align:left;color:var(--cr);font-size:11px">\u8cb7\u5bb6</th>' +
+          '<th style="padding:8px 12px;text-align:left;color:var(--cr);font-size:11px">\u72c0\u614b</th>' +
+          '<th style="padding:8px 12px;text-align:right;color:var(--cr);font-size:11px">\u5be6\u6536\u91d1\u984d</th>' +
+        '</tr></thead>' +
+        '<tbody>' + rows_html + '</tbody>' +
+      '</table>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px">' +
+      '<button class="btn btn-p" id="ss-import-confirm">\u78ba\u8a8d\u532f\u5165 ' + newOrders.length + ' \u7b46</button>' +
+      '<button class="btn btn-o" id="ss-import-cancel">\u53d6\u6d88</button>' +
+    '</div>';
 
-    ge('ss-import-confirm').addEventListener('click', () => {
-      // Merge: skip duplicates by sourceId
-      const existingIds = new Set(externalOrders.map(o => o.sourceId));
-      const toAdd = newOrders.filter(o => !existingIds.has(o.sourceId));
-      externalOrders = [...externalOrders, ...toAdd];
-      saveToLocal();
-      showToast('已匯入 ' + toAdd.length + ' 筆賣貨便訂單' + (toAdd.length < newOrders.length ? '（' + (newOrders.length - toAdd.length) + ' 筆重複略過）' : ''));
-      PF.sellship();
-    });
+  ge('ss-import-confirm').addEventListener('click', function() {
+    var existingIds = new Set(externalOrders.map(function(o){ return o.sourceId; }));
+    var toAdd = newOrders.filter(function(o){ return !existingIds.has(o.sourceId); });
+    externalOrders = externalOrders.concat(toAdd);
+    saveToLocal();
+    var msg = toAdd.length < newOrders.length
+      ? '\u5df2\u532f\u5165 ' + toAdd.length + ' \u7b46\uff08' + (newOrders.length - toAdd.length) + ' \u7b46\u91cd\u8907\u7565\u904e\uff09'
+      : '\u5df2\u532f\u5165 ' + toAdd.length + ' \u7b46\u8ce3\u8ca8\u4fbf\u8a02\u55ae';
+    showToast(msg);
+    PF.sellship();
+  });
 
-    ge('ss-import-cancel').addEventListener('click', () => {
-      preview.style.display = 'none';
-    });
-  }
+  ge('ss-import-cancel').addEventListener('click', function() {
+    preview.style.display = 'none';
+  });
 }
 
 function renderSellShipReport() {
@@ -3390,44 +3383,45 @@ PF.datamanage = function() {
   ge('clear-fb-only-btn')?.addEventListener('click', async () => {
     const statusEl = ge('fb-clear-status');
     if (!db) {
-      if (statusEl) statusEl.textContent = '❌ Firebase 未連線（離線模式）';
+      if (statusEl) statusEl.innerHTML = '❌ Firebase 未連線';
       return;
     }
-    if (!confirm('確定要清除 Firebase 雲端所有資料嗎？')) return;
-    if (statusEl) statusEl.textContent = '⏳ 正在連線 Firebase…';
-    try {
-      const cols = ['products','members','orders','employees','restockLog','config'];
-      let total = 0;
-      for (const col of cols) {
-        if (statusEl) statusEl.textContent = '⏳ 清除 ' + col + '…';
+    if (!confirm('確定強制清除 Firebase 全部資料？')) return;
+
+    const cols = ['products','members','orders','employees','restockLog','config'];
+    let report = '';
+
+    for (const col of cols) {
+      try {
+        if (statusEl) statusEl.innerHTML = '⏳ 讀取 ' + col + '…';
         const snap = await db.collection(col).get();
+        report += col + ': ' + snap.size + ' 筆<br>';
         if (!snap.empty) {
-          // Batch delete (max 500 per batch)
+          // delete in batches of 500
           let batch = db.batch();
-          let count = 0;
+          let cnt = 0;
           for (const doc of snap.docs) {
             batch.delete(doc.ref);
-            count++;
-            if (count === 500) {
-              await batch.commit();
-              batch = db.batch();
-              count = 0;
-            }
+            cnt++;
+            if (cnt === 500) { await batch.commit(); batch = db.batch(); cnt = 0; }
           }
-          if (count > 0) await batch.commit();
-          total += snap.size;
+          if (cnt > 0) await batch.commit();
+          report += '&nbsp;&nbsp;→ 已刪除 ' + snap.size + ' 筆<br>';
+        } else {
+          report += '&nbsp;&nbsp;→ 已是空的<br>';
         }
+      } catch(e) {
+        report += col + ': ❌ 錯誤 ' + e.message + '<br>';
       }
-      if (statusEl) statusEl.textContent = '✅ 雲端已清除 ' + total + ' 筆資料！刷新頁面生效';
-      // Reset local state too
-      products = []; members = []; orders = []; employees = []; restockLog = [];
-      saveToLocal();
-      showToast('✅ Firebase 雲端已清除！');
-    } catch(e) {
-      console.error('FB clear error:', e);
-      if (statusEl) statusEl.textContent = '❌ 清除失敗：' + e.message;
     }
-  });
+
+    // Also clear localStorage
+    localStorage.removeItem(STORAGE_KEY);
+    products = []; members = []; orders = []; employees = []; restockLog = [];
+
+    if (statusEl) statusEl.innerHTML = '<strong>✅ 清除完成：</strong><br>' + report + '<br>請刷新頁面確認';
+    showToast('✅ Firebase 已強制清除！');
+  }););
 
   ge('export-btn').addEventListener('click', exportBackup);
 
@@ -3703,17 +3697,17 @@ const _origCheckout = doCheckout;
       } else {
         // Firebase 是空的 → 全新開始，清除本機舊資料
         localStorage.removeItem(STORAGE_KEY);
+        products = []; members = []; orders = []; employees = []; restockLog = [];
         PF.pos();
+        showToast('✅ 全新開始（Firebase 空白）');
       }
     } catch(e) {
-      console.warn('Firebase 連線失敗，切換離線模式:', e);
-      // Firebase 失敗才用本機
+      console.warn('[WB] Firebase 連線失敗:', e);
       loadFromLocal();
       PF.pos();
       showSyncStatus('⚠ 離線模式');
     }
   } else {
-    // 無 Firebase → 純離線模式
     loadFromLocal();
     PF.pos();
   }
