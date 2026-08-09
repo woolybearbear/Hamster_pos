@@ -2065,16 +2065,20 @@ PF.orders = function() {
       title: '整筆退款',
       desc: '訂單 ' + o.id + '　合計 ' + fm(o.total),
       onConfirm: (note, qty, defective) => {
+        // 記錄退款前原始金額（供查詢用），並將合計歸零，避免整筆退款的訂單仍被算入營收
+        o.originalTotal = o.originalTotal != null ? o.originalTotal : o.total;
+        const refundedAmt = o.total;
         o.status = '退款';
         o.refundNote = note;
-        o.items.forEach(it => { it.refunded = true; });
+        o.items.forEach(it => { it.refunded = true; it.refundedQty = it.qty; });
+        o.total = 0;
         // restore member points & totalSpend for full order
         if (o.memberId) {
           const mem = members.find(m => m.id===o.memberId);
           if (mem) {
-            const ptsToDeduct = Math.floor(o.total / 100);
+            const ptsToDeduct = Math.floor(refundedAmt / 100);
             mem.points     = Math.max(0, mem.points - ptsToDeduct);
-            mem.totalSpend = Math.max(0, mem.totalSpend - o.total);
+            mem.totalSpend = Math.max(0, mem.totalSpend - refundedAmt);
             mem.tier       = getTierIdBySpend(mem.totalSpend);
           }
         }
@@ -2161,14 +2165,88 @@ PF.orders = function() {
 // ══════════════════════════════════════
 // REPORTS PAGE
 // ══════════════════════════════════════
+function exportOrdersToExcel(dateFrom, dateTo, labelForFile) {
+  if (typeof XLSX === 'undefined') { showToast('試算表套件尚未載入，請稍後再試'); return; }
+  const list = orders.filter(o => (o.status==='完成'||o.status==='部分退款'||o.status==='退款')
+      && (!dateFrom || o.date >= dateFrom) && (!dateTo || o.date <= dateTo))
+    .slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  if (!list.length) { showToast('此範圍內沒有訂單可匯出'); return; }
+  const headers = ['訂單編號','日期','客戶','會員ID','付款','折扣%','折扣額','折扣金','原始金額','實收總額','狀態'];
+  const aoa = [headers];
+  const months = [...new Set(list.map(o=>(o.date||'').slice(0,7)))];
+  let grandTotal = 0;
+  months.forEach(m => {
+    const monthOrders = list.filter(o=>(o.date||'').slice(0,7)===m);
+    monthOrders.forEach(o => {
+      const original = o.originalTotal != null ? o.originalTotal : o.total;
+      aoa.push([o.id,o.date,o.customer,o.memberId||'散客',o.payment,o.discPct+'%',o.discAmt,o.discFix,original,o.total,o.status]);
+    });
+    const monthTotal = monthOrders.reduce((s,o)=>s+o.total,0);
+    grandTotal += monthTotal;
+    aoa.push(['','','','','','','','',m+' 當月總計',monthTotal,'']);
+    aoa.push([]);
+  });
+  aoa.push(['','','','','','','','','範圍總計',grandTotal,'']);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{wch:14},{wch:11},{wch:10},{wch:10},{wch:8},{wch:7},{wch:8},{wch:8},{wch:10},{wch:14},{wch:10}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '訂單報表');
+  XLSX.writeFile(wb, 'WM熊窩_訂單報表_' + (labelForFile || today()) + '.xlsx');
+}
+
+function openOrderExportModal() {
+  const _today = today();
+  const _thisMonthStart = _today.slice(0,7) + '-01';
+  const _lastMonthDate = new Date(); _lastMonthDate.setDate(1); _lastMonthDate.setMonth(_lastMonthDate.getMonth()-1);
+  const _lastMonthStart = _lastMonthDate.toISOString().slice(0,7) + '-01';
+  const _lastMonthEndDate = new Date(_lastMonthDate.getFullYear(), _lastMonthDate.getMonth()+1, 0);
+  const _lastMonthEnd = _lastMonthEndDate.toISOString().slice(0,10);
+
+  const ov = document.createElement('div'); ov.className = 'ovm';
+  ov.innerHTML =
+    '<div class="modal" style="max-width:400px">' +
+      '<div class="mhd"><div class="mttl">匯出訂單 Excel</div><button class="btn-g" id="oe-x">' + IC.x + '</button></div>' +
+      '<div class="mbd" style="padding:18px 20px">' +
+        '<div style="font-size:11px;font-weight:700;color:var(--txt3);letter-spacing:.5px;margin-bottom:8px">快速選擇範圍</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">' +
+          '<button class="btn btn-o btn-sm" id="oe-all">全部訂單</button>' +
+          '<button class="btn btn-o btn-sm" id="oe-this-month">本月</button>' +
+          '<button class="btn btn-o btn-sm" id="oe-last-month">上個月</button>' +
+        '</div>' +
+        '<div style="font-size:11px;font-weight:700;color:var(--txt3);letter-spacing:.5px;margin-bottom:8px">或自訂日期範圍</div>' +
+        '<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">' +
+          '<input type="date" id="oe-from" class="fi" style="flex:1">' +
+          '<span style="font-size:12px;color:var(--txt3)">–</span>' +
+          '<input type="date" id="oe-to" class="fi" style="flex:1">' +
+        '</div>' +
+        '<div style="font-size:11px;color:var(--txt3)">留空 = 不限制起始／結束日期</div>' +
+      '</div>' +
+      '<div class="mft"><button class="btn btn-o" id="oe-cancel">取消</button><button class="btn btn-p" id="oe-confirm">' + IC.dl + ' 匯出</button></div>' +
+    '</div>';
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.querySelector('#oe-x').addEventListener('click', close);
+  ov.querySelector('#oe-cancel').addEventListener('click', close);
+
+  const fromInp = ov.querySelector('#oe-from'), toInp = ov.querySelector('#oe-to');
+  ov.querySelector('#oe-all').addEventListener('click', () => { fromInp.value=''; toInp.value=''; });
+  ov.querySelector('#oe-this-month').addEventListener('click', () => { fromInp.value=_thisMonthStart; toInp.value=_today; });
+  ov.querySelector('#oe-last-month').addEventListener('click', () => { fromInp.value=_lastMonthStart; toInp.value=_lastMonthEnd; });
+
+  ov.querySelector('#oe-confirm').addEventListener('click', () => {
+    const from = fromInp.value, to = toInp.value;
+    if (from && to && from > to) { showToast('起始日期不能晚於結束日期'); return; }
+    const label = from||to ? (from||'起') + '_' + (to||'今') : today();
+    close();
+    exportOrdersToExcel(from, to, label);
+  });
+}
+
 PF.reports = function() {
   const exportOrderBtn = document.createElement('button');
-  exportOrderBtn.className='btn btn-o rpt-exp-btn'; exportOrderBtn.innerHTML=IC.dl+'<span class="btn-txt"> 匯出訂單 CSV</span>';exportOrderBtn.title='匯出訂單 CSV';
-  exportOrderBtn.addEventListener('click', () => {
-    const done = orders.filter(o=>o.status==='完成');
-    const rows = done.map(o=>[o.id,o.date,o.customer,o.memberId||'散客',o.payment,o.discPct+'%',o.discAmt,o.discFix,o.total,o.status]);
-    exportCSV('WM熊窩_訂單報表_'+today()+'.csv', rows, ['訂單編號','日期','客戶','會員ID','付款','折扣%','折扣額','折扣金','總額','狀態']);
-  });
+  exportOrderBtn.className='btn btn-o rpt-exp-btn'; exportOrderBtn.innerHTML=IC.dl+'<span class="btn-txt"> 匯出訂單 Excel</span>';exportOrderBtn.title='匯出訂單 Excel';
+  exportOrderBtn.addEventListener('click', openOrderExportModal);
   const exportRestockBtn = document.createElement('button');
   exportRestockBtn.className='btn btn-o rpt-exp-btn'; exportRestockBtn.innerHTML=IC.dl+'<span class="btn-txt"> 匯出進貨紀錄</span>';exportRestockBtn.title='匯出進貨紀錄';
   exportRestockBtn.addEventListener('click', () => {
@@ -2181,7 +2259,8 @@ PF.reports = function() {
   ge('tb-act').appendChild(exportOrderBtn);
 
   const thisMonth = today().slice(0,7);  // YYYY-MM
-  const done   = orders.filter(o=>o.status==='完成');
+  // 已結案訂單：完成 / 部分退款（保留未退部分金額）。全額退款訂單 total 已歸零，不列入筆數與均價統計，避免拉低客單價。
+  const done   = orders.filter(o=>o.status==='完成'||o.status==='部分退款');
   const doneM  = done.filter(o=>o.date.startsWith(thisMonth));  // 本月
 
   // 本月統計
@@ -2267,15 +2346,22 @@ PF.reports = function() {
 // SPLIT PAGE
 // ══════════════════════════════════════
 PF.split = function() {
-  const done = orders.filter(o=>o.status==='完成');
+  // 已結案訂單：完成 / 部分退款 / 退款（退款訂單的品項會在 itNet() 中被扣為 0，不影響加總，但仍納入避免遺漏）
+  const done = orders.filter(o=>o.status==='完成'||o.status==='部分退款'||o.status==='退款');
 
-  // ── 折扣分攤：每筆訂單折扣按品項比例分配 ──
-  function itNet(o, it) {
+  // ── 折扣分攤：每筆訂單折扣按品項比例分配，再扣除該品項已退款金額 ──
+  function itBreakdown(o, it) {
     const rawSub = o.items.reduce((s,x) => s + x.price*x.qty, 0);
     const totalDisc = (o.discAmt||0) + (o.discFix||0) + (o.ptDeduct||0);
     const ratio = rawSub > 0 ? (it.price*it.qty) / rawSub : 0;
-    return Math.max(0, it.price*it.qty - totalDisc*ratio);
+    const gross = it.price*it.qty;
+    const discShare = Math.round(totalDisc*ratio);
+    const refundedQty = it.refundedQty || (it.refunded ? it.qty : 0);
+    const refundedAmt = refundedQty * it.price;
+    const net = Math.max(0, gross - discShare - refundedAmt);
+    return { gross, discShare, refundedQty, refundedAmt, net };
   }
+  function itNet(o, it) { return itBreakdown(o, it).net; }
 
   const [o1,o2] = shopConfig.owners;
 
@@ -2290,16 +2376,15 @@ PF.split = function() {
     const rows = [];
     done.forEach(o => {
       o.items.forEach(it => {
-        const net = itNet(o, it);
-        const discShare = Math.round((it.price*it.qty) - net);
-        const equalShare = Math.round(net / 2);
+        const bd = itBreakdown(o, it);
+        const equalShare = Math.round(bd.net / 2);
         rows.push([o.id, o.date, it.owner, it.name, it.cat, it.qty, it.price,
-          it.qty*it.price, discShare, Math.round(net),
+          bd.gross, bd.discShare, bd.refundedQty, bd.refundedAmt, Math.round(bd.net),
           splitMode==='equal' ? equalShare : '—', splitMode==='equal' ? equalShare : '—']);
       });
     });
     exportCSV('WM熊窩_分帳報表_'+today()+'.csv', rows,
-      ['訂單編號','日期','歸屬闆娘','商品名稱','分類','數量','單價','原始小計','分攤折扣','實收金額',o1+'均攤',o2+'均攤']);
+      ['訂單編號','日期','歸屬闆娘','商品名稱','分類','數量','單價','原始小計','分攤折扣','已退數量','已退金額','實收金額',o1+'均攤',o2+'均攤']);
   });
   ge('tb-act').innerHTML='';
   ge('tb-act').appendChild(modeBtn);
@@ -2951,14 +3036,14 @@ PF.sellship = function() {
         '<div class="card-hd"><span class="card-ttl">📦 匯入賣貨便訂單</span></div>' +
         '<div style="padding:18px 20px">' +
           '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px">' +
-            '<label class="btn btn-p" style="cursor:pointer">選擇 .csv 檔案<input type="file" id="ss-file" accept=".csv" style="display:none"></label>' +
+            '<label class="btn btn-p" style="cursor:pointer">選擇 .xlsx 檔案<input type="file" id="ss-file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none"></label>' +
             '<span id="ss-filename" style="font-size:12px;color:var(--txt3)">尚未選取檔案</span>' +
           '</div>' +
           '<div id="ss-preview" style="display:none"></div>' +
         '</div>' +
       '</div>' +
       '<div class="card" id="ss-report-card">' +
-        '<div class="card-hd"><span class="card-ttl">📊 月結匯總報表</span><button class="btn btn-o btn-sm" id="ss-export-btn">匯出 CSV</button></div>' +
+        '<div class="card-hd"><span class="card-ttl">📊 月結匯總報表</span><button class="btn btn-o btn-sm" id="ss-export-btn">匯出 Excel</button></div>' +
         '<div style="padding:16px 20px" id="ss-report-body">' +
           renderSellShipReport() +
         '</div>' +
@@ -3239,12 +3324,19 @@ function renderSellShipReport() {
 }
 
 function exportSellShipCSV() {
+  if (typeof XLSX === 'undefined') { showToast('試算表套件尚未載入，請稍後再試'); return; }
   const posOrders = orders.filter(o => o.status === '完成');
+  const headers = ['來源','日期','訂單編號','客戶/買家','付款方式','商品金額','賣場名稱'];
   const allRows = [
     ...posOrders.map(o => ['門市', o.date, o.id, o.customer, o.payment, o.total, '']),
     ...externalOrders.map(o => ['賣貨便', o.date, o.sourceId, o.buyer, o.payment, (o.netRevenue != null ? o.netRevenue : (o.total || o.subtotal)), o.shopName]),
   ].sort((a,b) => b[1].localeCompare(a[1]));
-  exportCSV('WM熊窩_月結報表_' + today() + '.csv', allRows, ['來源','日期','訂單編號','客戶/買家','付款方式','商品金額','賣場名稱']);
+
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...allRows]);
+  ws['!cols'] = [{wch:8},{wch:11},{wch:14},{wch:14},{wch:10},{wch:12},{wch:16}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '月結報表');
+  XLSX.writeFile(wb, 'WM熊窩_月結報表_' + today() + '.xlsx');
 }
 
 PF.datamanage = function() {
