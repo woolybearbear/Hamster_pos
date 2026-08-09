@@ -534,6 +534,7 @@ try {
 // ── Firebase 狀態 ──
 let fbReady = false;
 let fbListeners = []; // 儲存 unsubscribe functions
+let pendingFBWrites = 0; // 尚未完成的雲端寫入次數，用來提醒使用者「同步中先別關頁面」
 
 // ── Firestore 集合參照 ──
 const COL = {
@@ -554,6 +555,7 @@ function sanitize(obj) {
 
 // 儲存整批資料到 Firestore（批次寫入）
 async function saveCollectionToFB(colName, arr, idField = 'id') {
+  pendingFBWrites++;
   try {
     const col = db.collection(colName);
     const batch = db.batch();
@@ -563,6 +565,7 @@ async function saveCollectionToFB(colName, arr, idField = 'id') {
     });
     await batch.commit();
   } catch(e) { console.warn('FB save error:', colName, e); }
+  finally { pendingFBWrites = Math.max(0, pendingFBWrites-1); }
 }
 
 // 刪除 Firestore 中已不存在的文件
@@ -580,9 +583,11 @@ async function syncDeletesFB(colName, localArr, idField = 'id') {
 
 // 儲存單一文件到 Firestore
 async function saveDocToFB(colName, id, data) {
+  pendingFBWrites++;
   try {
     await db.collection(colName).doc(id).set(sanitize(data));
   } catch(e) { console.warn('FB doc save error:', colName, id, e); }
+  finally { pendingFBWrites = Math.max(0, pendingFBWrites-1); }
 }
 
 // 刪除 Firestore 文件
@@ -2035,12 +2040,17 @@ PF.orders = function() {
     ge('ord-note-edit').style.display = '';
     ge('ord-note-edit-area').style.display = 'none';
   });
-  ge('ord-note-save')?.addEventListener('click', () => {
+  ge('ord-note-save')?.addEventListener('click', async () => {
     const newNote = ge('ord-note-inp').value.trim();
     selOrder.note = newNote;
     const ord = orders.find(o => o.id === selOrder.id);
     if (ord) ord.note = newNote;
     saveToLocal();
+    // 直接、單獨寫入這一筆訂單到雲端並等待完成，避免整批同步還沒跑完就被使用者刷新蓋掉
+    if (fbReady && ord) {
+      try { await saveDocToFB('orders', ord.id, ord); }
+      catch(e) { console.warn('備註同步失敗:', e); showToast('⚠ 備註已存本機，但雲端同步失敗，請確認網路'); }
+    }
     showToast('備註已更新');
     PF.orders();
   });
@@ -3638,8 +3648,13 @@ function saveToLocal() {
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   } catch(e) { console.warn('儲存失敗:', e); }
-  // 同步到 Firebase（非同步，不阻塞 UI）
-  if (fbReady) pushAllToFB().catch(e => console.warn('FB sync error:', e));
+  // 同步到 Firebase（每次有任何更動都立即觸發，不等 60 秒排程）
+  if (fbReady) {
+    showSyncStatus('🔄 同步中…');
+    pushAllToFB()
+      .then(() => showSyncStatus('✅ 已同步 ' + new Date().toLocaleTimeString('zh-TW', {hour:'2-digit',minute:'2-digit'})))
+      .catch(e => { console.warn('FB sync error:', e); showSyncStatus('⚠ 同步失敗，請確認網路'); });
+  }
 }
 
 function loadFromLocal() {
@@ -3780,7 +3795,14 @@ function openImportConfirmModal({ backupVersion, exportedAt, missing, onConfirm 
 
 // Auto-save every 60 seconds + on page unload
 setInterval(saveToLocal, 60000);
-window.addEventListener('beforeunload', saveToLocal);
+window.addEventListener('beforeunload', (e) => {
+  saveToLocal();
+  if (pendingFBWrites > 0) {
+    e.preventDefault();
+    e.returnValue = ''; // 觸發瀏覽器原生「確定要離開嗎」提示，避免同步未完成就被刷新蓋掉
+    return '';
+  }
+});
 
 // Wrap data-mutation functions to auto-save
 const _origCheckout = doCheckout;
