@@ -2171,7 +2171,7 @@ function exportOrdersToExcel(dateFrom, dateTo, labelForFile) {
       && (!dateFrom || o.date >= dateFrom) && (!dateTo || o.date <= dateTo))
     .slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   if (!list.length) { showToast('此範圍內沒有訂單可匯出'); return; }
-  const headers = ['訂單編號','日期','客戶','會員ID','付款','折扣%','折扣額','折扣金','原始金額','實收總額','狀態'];
+  const headers = ['訂單編號','日期','客戶','會員ID','付款','折扣%','折扣額','折扣金','原始金額','實收總額','狀態','備註','退款備註'];
   const aoa = [headers];
   const months = [...new Set(list.map(o=>(o.date||'').slice(0,7)))];
   let grandTotal = 0;
@@ -2179,17 +2179,17 @@ function exportOrdersToExcel(dateFrom, dateTo, labelForFile) {
     const monthOrders = list.filter(o=>(o.date||'').slice(0,7)===m);
     monthOrders.forEach(o => {
       const original = o.originalTotal != null ? o.originalTotal : o.total;
-      aoa.push([o.id,o.date,o.customer,o.memberId||'散客',o.payment,o.discPct+'%',o.discAmt,o.discFix,original,o.total,o.status]);
+      aoa.push([o.id,o.date,o.customer,o.memberId||'散客',o.payment,o.discPct+'%',o.discAmt,o.discFix,original,o.total,o.status,o.note||'',o.refundNote||'']);
     });
     const monthTotal = monthOrders.reduce((s,o)=>s+o.total,0);
     grandTotal += monthTotal;
-    aoa.push(['','','','','','','','',m+' 當月總計',monthTotal,'']);
+    aoa.push(['','','','','','','','',m+' 當月總計',monthTotal,'','','']);
     aoa.push([]);
   });
-  aoa.push(['','','','','','','','','範圍總計',grandTotal,'']);
+  aoa.push(['','','','','','','','','範圍總計',grandTotal,'','','']);
 
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{wch:14},{wch:11},{wch:10},{wch:10},{wch:8},{wch:7},{wch:8},{wch:8},{wch:10},{wch:14},{wch:10}];
+  ws['!cols'] = [{wch:14},{wch:11},{wch:10},{wch:10},{wch:8},{wch:7},{wch:8},{wch:8},{wch:10},{wch:14},{wch:10},{wch:24},{wch:24}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '訂單報表');
   XLSX.writeFile(wb, 'WM熊窩_訂單報表_' + (labelForFile || today()) + '.xlsx');
@@ -2262,17 +2262,19 @@ PF.reports = function() {
   // 已結案訂單：完成 / 部分退款（保留未退部分金額）。全額退款訂單 total 已歸零，不列入筆數與均價統計，避免拉低客單價。
   const done   = orders.filter(o=>o.status==='完成'||o.status==='部分退款');
   const doneM  = done.filter(o=>o.date.startsWith(thisMonth));  // 本月
+  // 品項實際淨數量（扣除已退款數量），退貨商品已回補庫存，不應計入成本／熱銷排行
+  const netQty = it => Math.max(0, it.qty - (it.refundedQty || (it.refunded ? it.qty : 0)));
 
   // 本月統計
   const totalRevM  = doneM.reduce((s,o)=>s+o.total,0);
   const avgOrdM    = doneM.length ? Math.round(totalRevM/doneM.length) : 0;
-  const totalCostM = doneM.reduce((s,o)=>s+o.items.reduce((ss,it)=>{const p=products.find(x=>x.name===it.name);return ss+(p?p.cost*it.qty:0);},0),0);
+  const totalCostM = doneM.reduce((s,o)=>s+o.items.reduce((ss,it)=>{const p=products.find(x=>x.name===it.name);return ss+(p?p.cost*netQty(it):0);},0),0);
   const marginM    = totalRevM ? Math.round(((totalRevM-totalCostM)/totalRevM)*100) : 0;
 
   // 累計統計
   const totalRev  = done.reduce((s,o)=>s+o.total,0);
   const avgOrd    = done.length ? Math.round(totalRev/done.length) : 0;
-  const totalCost = done.reduce((s,o)=>s+o.items.reduce((ss,it)=>{const p=products.find(x=>x.name===it.name);return ss+(p?p.cost*it.qty:0);},0),0);
+  const totalCost = done.reduce((s,o)=>s+o.items.reduce((ss,it)=>{const p=products.find(x=>x.name===it.name);return ss+(p?p.cost*netQty(it):0);},0),0);
   const margin    = totalRev ? Math.round(((totalRev-totalCost)/totalRev)*100) : 0;
 
   const lowCount = products.filter(p=>p.stock<=p.lowStock).length;
@@ -2285,13 +2287,13 @@ PF.reports = function() {
     return { l: (d.getMonth()+1)+'/'+ d.getDate(), sub: '週'+DAY_LABELS[d.getDay()], v };
   });
   const maxV = Math.max(...days.map(d=>d.v), 1);
-  // 本月熱銷
+  // 本月熱銷（以淨數量計算，退款品項不計入排行）
   const itemRevM = {};
-  doneM.forEach(o=>o.items.forEach(it=>{itemRevM[it.name]=(itemRevM[it.name]||0)+it.qty*it.price;}));
+  doneM.forEach(o=>o.items.forEach(it=>{const q=netQty(it); if(q>0) itemRevM[it.name]=(itemRevM[it.name]||0)+q*it.price;}));
   const topItemsM = Object.entries(itemRevM).sort((a,b)=>b[1]-a[1]).slice(0,5);
-  // 累計熱銷
+  // 累計熱銷（以淨數量計算，退款品項不計入排行）
   const itemRev = {};
-  done.forEach(o=>o.items.forEach(it=>{itemRev[it.name]=(itemRev[it.name]||0)+it.qty*it.price;}));
+  done.forEach(o=>o.items.forEach(it=>{const q=netQty(it); if(q>0) itemRev[it.name]=(itemRev[it.name]||0)+q*it.price;}));
   const topItems = Object.entries(itemRev).sort((a,b)=>b[1]-a[1]).slice(0,5);
 
   const ymLabel = thisMonth.replace('-','/');
@@ -2364,6 +2366,8 @@ PF.split = function() {
   function itNet(o, it) { return itBreakdown(o, it).net; }
 
   const [o1,o2] = shopConfig.owners;
+  // 品項實際淨數量（扣除已退款數量），退貨商品已回補庫存，不應計入成本
+  const netQty = it => Math.max(0, it.qty - (it.refundedQty || (it.refunded ? it.qty : 0)));
 
   // ── toolbar：均攤切換 + 匯出 ──
   const modeBtn = document.createElement('button');
@@ -2396,7 +2400,7 @@ PF.split = function() {
     done.forEach(o => o.items.forEach(it => {
       const net = itNet(o, it);
       const p   = products.find(x=>x.name===it.name);
-      const c   = p ? p.cost*it.qty : 0;
+      const c   = p ? p.cost*netQty(it) : 0;
       if (it.owner === owner) {
         rev += net; gross += it.price*it.qty; cost += c;
       } else if (it.owner === '共同') {
