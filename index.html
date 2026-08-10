@@ -570,6 +570,7 @@ async function saveCollectionToFB(colName, arr, idField = 'id') {
 
 // 刪除 Firestore 中已不存在的文件
 async function syncDeletesFB(colName, localArr, idField = 'id') {
+  pendingFBWrites++;
   try {
     const snap = await db.collection(colName).get();
     const localIds = new Set(localArr.map(x => x[idField]));
@@ -579,6 +580,7 @@ async function syncDeletesFB(colName, localArr, idField = 'id') {
     });
     await batch.commit();
   } catch(e) { console.warn('FB delete sync error:', colName, e); }
+  finally { pendingFBWrites = Math.max(0, pendingFBWrites-1); }
 }
 
 // 儲存單一文件到 Firestore
@@ -592,9 +594,11 @@ async function saveDocToFB(colName, id, data) {
 
 // 刪除 Firestore 文件
 async function deleteDocFromFB(colName, id) {
+  pendingFBWrites++;
   try {
     await db.collection(colName).doc(id).delete();
   } catch(e) { console.warn('FB delete error:', colName, id, e); }
+  finally { pendingFBWrites = Math.max(0, pendingFBWrites-1); }
 }
 
 // ── 從 Firestore 載入所有資料 ──
@@ -615,7 +619,7 @@ async function loadFromFB() {
       members    = memSnap.docs.map(d => d.data());
       orders     = ordSnap.docs.map(d => d.data());
       employees  = empSnap.docs.map(d => d.data());
-      restockLog = logSnap.docs.map(d => d.data());
+      restockLog = logSnap.docs.map(d => { const data = d.data(); if (!data.id) data.id = d.id; return data; });
       cfgSnap.docs.forEach(d => {
         if (d.id === 'shopConfig')  Object.assign(shopConfig, d.data());
         if (d.id === 'tierConfig')  tierConfig = d.data().tiers || tierConfig;
@@ -642,7 +646,7 @@ async function loadFromFB() {
   }
 }
 
-// ── 把所有本機資料推送到 Firestore ──
+// ── 把所有本機資料推送到 Firestore（同時刪除雲端已不存在於本機的資料，確保刪除動作真的生效）──
 async function pushAllToFB() {
   if (!db) return;
   await Promise.all([
@@ -653,6 +657,14 @@ async function pushAllToFB() {
     saveCollectionToFB('restockLog', restockLog),
     saveDocToFB('config', 'shopConfig', shopConfig),
     saveDocToFB('config', 'tierConfig', { tiers: tierConfig }),
+  ]);
+  // 上面只會新增/更新，這裡才會真正把本機已刪除、但雲端還留著的資料清掉
+  await Promise.all([
+    syncDeletesFB('products', products),
+    syncDeletesFB('members', members),
+    syncDeletesFB('orders', orders),
+    syncDeletesFB('employees', employees),
+    syncDeletesFB('restockLog', restockLog),
   ]);
 }
 
@@ -666,7 +678,7 @@ function startRealtimeSync() {
   const listen = (colName, setter, transform) => {
     const unsub = db.collection(colName).onSnapshot(snap => {
       if (!fbReady) return;
-      const data = snap.docs.map(d => d.data());
+      const data = snap.docs.map(d => { const item = d.data(); if (!item.id) item.id = d.id; return item; });
       setter(transform ? transform(data) : data);
       saveToLocal();
       // 重新渲染目前頁面
@@ -1410,7 +1422,7 @@ function openCheckoutModal() {
 }
 
 
-function doCheckout(orderNote, cashPaid) {
+async function doCheckout(orderNote, cashPaid) {
   if (!cart.length) return;
   const sub  = cart.reduce((s,x) => s+x.price*x.qty, 0);
   const dAmt = Math.round(sub * (discount/100));
@@ -1448,6 +1460,11 @@ function doCheckout(orderNote, cashPaid) {
   const cm = cartMember;
   cart=[]; discount=0; discountFix=0; payMethod='現金'; cartMember=null; usePoints=false; redeemIds=[];
   saveToLocal();
+  // 直接、單獨把這筆新訂單寫入雲端並等待完成，確保結帳完成畫面出現前，訂單已經確實同步（不是只排隊等整批同步跑完）
+  if (fbReady) {
+    try { await saveDocToFB('orders', order.id, order); }
+    catch(e) { console.warn('訂單同步失敗:', e); showToast('⚠ 訂單已存本機，但雲端同步失敗，請確認網路'); }
+  }
   showReceiptModal(order, cm);
 }
 
@@ -1599,9 +1616,12 @@ function renderInvTable() {
   }));
   tb.querySelectorAll('.inv-restock').forEach(b => b.addEventListener('click', () => openRestockModal(b.dataset.id)));
   tb.querySelectorAll('.inv-edit').forEach(b => b.addEventListener('click', () => openProdModal(b.dataset.id)));
-  tb.querySelectorAll('.inv-del').forEach(b => b.addEventListener('click', () => {
+  tb.querySelectorAll('.inv-del').forEach(b => b.addEventListener('click', async () => {
     if (!confirm('確定刪除此商品？')) return;
-    products = products.filter(p => p.id !== b.dataset.id);
+    const delId = b.dataset.id;
+    products = products.filter(p => p.id !== delId);
+    saveToLocal();
+    if (fbReady) { try { await deleteDocFromFB('products', delId); } catch(e) { console.warn(e); } }
     renderInvTable();
   }));
   // bulk select
@@ -1784,7 +1804,7 @@ function openRestockModal(id) {
       String(now.getDate()).padStart(2,'0') + ' ' +
       String(now.getHours()).padStart(2,'0') + ':' +
       String(now.getMinutes()).padStart(2,'0');
-    restockLog.unshift({ pid: p.id, name: p.name, owner: p.owner, qty, before: p.stock, after: p.stock + qty, ts, note });
+    restockLog.unshift({ id: genId(), pid: p.id, name: p.name, owner: p.owner, qty, before: p.stock, after: p.stock + qty, ts, note });
     p.stock += qty;
     saveToLocal();
     close();
@@ -2062,10 +2082,12 @@ PF.orders = function() {
       PF.orders();
     });
   });
-  ge('pg').querySelectorAll('.ord-done').forEach(b => b.addEventListener('click', e => {
+  ge('pg').querySelectorAll('.ord-done').forEach(b => b.addEventListener('click', async e => {
     e.stopPropagation();
     const o = orders.find(x=>x.id===b.dataset.oid); if(o) o.status='完成';
     if (selOrder?.id===b.dataset.oid) selOrder.status='完成';
+    saveToLocal();
+    if (fbReady && o) { try { await saveDocToFB('orders', o.id, o); } catch(e) { console.warn(e); } }
     PF.orders();
   }));
   ge('pg').querySelectorAll('.ord-ref').forEach(b => b.addEventListener('click', e => {
@@ -2074,7 +2096,7 @@ PF.orders = function() {
     openRefundModal({
       title: '整筆退款',
       desc: '訂單 ' + o.id + '　合計 ' + fm(o.total),
-      onConfirm: (note, qty, defective) => {
+      onConfirm: async (note, qty, defective) => {
         // 記錄退款前原始金額（供查詢用），並將合計歸零，避免整筆退款的訂單仍被算入營收
         o.originalTotal = o.originalTotal != null ? o.originalTotal : o.total;
         const refundedAmt = o.total;
@@ -2101,16 +2123,20 @@ PF.orders = function() {
         }
         if (selOrder?.id===o.id) selOrder = o;
         saveToLocal();
+        if (fbReady) { try { await saveDocToFB('orders', o.id, o); } catch(e) { console.warn('退款同步失敗:', e); } }
         showToast('已退款：' + o.id);
         PF.orders();
       }
     });
   }));
-  ge('pg').querySelectorAll('.ord-del').forEach(b => b.addEventListener('click', e => {
+  ge('pg').querySelectorAll('.ord-del').forEach(b => b.addEventListener('click', async e => {
     e.stopPropagation();
     if (!confirm('確定刪除此筆訂單？')) return;
-    if (selOrder?.id===b.dataset.oid) selOrder=null;
-    orders = orders.filter(o => o.id!==b.dataset.oid);
+    const delId = b.dataset.oid;
+    if (selOrder?.id===delId) selOrder=null;
+    orders = orders.filter(o => o.id!==delId);
+    saveToLocal();
+    if (fbReady) { try { await deleteDocFromFB('orders', delId); } catch(e) { console.warn(e); } }
     PF.orders();
   }));
 
@@ -2127,7 +2153,7 @@ PF.orders = function() {
       desc: item.name + ' ×' + item.qty,
       maxQty,
       unitPrice: item.price,
-      onConfirm: (note, qty, defective) => {
+      onConfirm: async (note, qty, defective) => {
         const refundQty = qty || maxQty;
         const refundAmt = item.price * refundQty;
         ord.items[idx].refundedQty = (ord.items[idx].refundedQty || 0) + refundQty;
@@ -2156,6 +2182,7 @@ PF.orders = function() {
         }
         if (selOrder?.id===ord.id) selOrder = ord;
         saveToLocal();
+        if (fbReady) { try { await saveDocToFB('orders', ord.id, ord); } catch(e) { console.warn('退款同步失敗:', e); } }
         showToast('已退款：' + item.name + ' ×' + refundQty + '　' + fm(refundAmt));
         PF.orders();
       }
@@ -2642,9 +2669,12 @@ function renderMbrTable() {
     ge('pg-title').textContent = '結帳收銀';
     loadMemberToCart(b.dataset.id);
   }));
-  tb.querySelectorAll('.mbr-del').forEach(b => b.addEventListener('click', () => {
+  tb.querySelectorAll('.mbr-del').forEach(b => b.addEventListener('click', async () => {
     if (!confirm('確定刪除此會員？')) return;
-    members = members.filter(m => m.id!==b.dataset.id);
+    const delId = b.dataset.id;
+    members = members.filter(m => m.id!==delId);
+    saveToLocal();
+    if (fbReady) { try { await deleteDocFromFB('members', delId); } catch(e) { console.warn(e); } }
     PF.members();
   }));
 
@@ -3023,6 +3053,7 @@ function renderTierCards() {
     if (!confirm('確定刪除此等級？')) return;
     tierConfig = tierConfig.filter(x => x.id != b.dataset.tid);
     members.forEach(m => { if (m.tier == b.dataset.tid) m.tier = 0; });
+    saveToLocal();
     renderTierCards();
   }));
 }
@@ -3598,9 +3629,12 @@ function renderEmpTable() {
       '<td><button class="btn btn-d btn-sm emp-del" data-id="' + e.id + '">' + IC.trash + '</button></td>' +
     '</tr>'
   ).join('');
-  tb.querySelectorAll('.emp-del').forEach(b => b.addEventListener('click', () => {
+  tb.querySelectorAll('.emp-del').forEach(b => b.addEventListener('click', async () => {
     if (!confirm('確定刪除此員工？')) return;
-    employees = employees.filter(e => e.id !== b.dataset.id);
+    const delId = b.dataset.id;
+    employees = employees.filter(e => e.id !== delId);
+    saveToLocal();
+    if (fbReady) { try { await deleteDocFromFB('employees', delId); } catch(e) { console.warn(e); } }
     renderEmpTable();
   }));
 
@@ -3674,6 +3708,7 @@ function loadFromLocal() {
       if (!shopConfig.owners || shopConfig.owners.length < 2) shopConfig.owners = ['Wooly', 'MuMu'];
     }
     if (data.restockLog) restockLog = data.restockLog;
+    restockLog.forEach(r => { if (!r.id) r.id = genId(); });
     products.forEach((p, i) => { if (p.sortOrder === undefined) p.sortOrder = i; });
     return data.savedAt || true;
   } catch(e) {
