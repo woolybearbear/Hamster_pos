@@ -1217,7 +1217,9 @@ function renderPosGrid() {
       '<div class="pc-ow">' + ownerTag(p.owner) + '</div>' +
       (p.stock>0 && p.stock<=p.lowStock ? '<div class="pc-lt">低庫存</div>' : '') +
       '<div class="pc-nm">' + p.name + '</div>' +
-      (p.spec ? '<div style="font-size:10px;color:var(--txt3);margin:-2px 0 3px;line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">' + p.spec + '</div>' : '') +
+      (p.variants && p.variants.length
+        ? '<div style="font-size:10px;color:var(--gold,#a67c3d);margin:-2px 0 3px;font-weight:600">🎨 ' + p.variants.length + ' 種規格可選</div>'
+        : (p.spec ? '<div style="font-size:10px;color:var(--txt3);margin:-2px 0 3px;line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">' + p.spec + '</div>' : '')) +
       '<div class="pc-pr">' + fm(p.price) + '</div>' +
       '<div class="pc-st">' + (p.stock===0 ? '已售完' : '庫存 '+p.stock+' '+p.unit) + '</div>' +
     '</div>'
@@ -1229,13 +1231,67 @@ function renderPosGrid() {
   };
 }
 
+function restoreStock(it, qty) {
+  const prod = it.pid ? products.find(p => p.id===it.pid) : products.find(p => p.name===it.name);
+  if (!prod) return;
+  if (it.variantId) {
+    const v = (prod.variants||[]).find(x => x.id===it.variantId);
+    if (v) { v.stock += qty; prod.stock = (prod.variants||[]).reduce((s,x)=>s+x.stock,0); return; }
+  }
+  prod.stock += qty;
+}
+
 function addToCart(pid) {
   const p = products.find(x => x.id===pid); if (!p || p.stock===0) return;
-  const ex = cart.find(x => x.id===pid);
+  if (p.variants && p.variants.length) { openVariantPickModal(p); return; }
+  const ex = cart.find(x => x.id===pid && !x.variantId);
   if (ex) { if (ex.qty >= p.stock) return; ex.qty++; }
   else cart.push({...p, qty:1});
   renderCartItems();
 }
+
+function openVariantPickModal(p) {
+  const ov = document.createElement('div'); ov.className='ovm';
+  ov.innerHTML =
+    '<div class="modal" style="max-width:380px">' +
+      '<div class="mhd"><div class="mttl">選擇規格－' + p.name + '</div><button class="btn-g" id="vp-x">' + IC.x + '</button></div>' +
+      '<div class="mbd" style="display:flex;flex-direction:column;gap:8px">' +
+        p.variants.map(v =>
+          '<button type="button" class="btn btn-o vp-opt" data-vid="' + v.id + '"' + (v.stock<=0?' disabled':'') + ' style="display:flex;justify-content:space-between;align-items:center;padding:13px 15px;width:100%' + (v.stock<=0?';opacity:.4' : '') + '">' +
+            '<span style="font-weight:600">' + v.name + '</span>' +
+            '<span style="font-size:12px;color:' + (v.stock<=0?'#b71c1c':'var(--txt3)') + '">' + (v.stock>0 ? '庫存 '+v.stock+' '+(p.unit||'') : '已售完') + '</span>' +
+          '</button>'
+        ).join('') +
+      '</div>' +
+      '<div class="mft"><button class="btn btn-o" id="vp-cancel">取消</button></div>' +
+    '</div>';
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.querySelector('#vp-x').addEventListener('click', close);
+  ov.querySelector('#vp-cancel').addEventListener('click', close);
+  ov.querySelectorAll('.vp-opt').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.disabled) return;
+      addVariantToCart(p.id, btn.dataset.vid);
+      close();
+    });
+  });
+}
+
+function addVariantToCart(pid, variantId) {
+  const p = products.find(x => x.id===pid); if (!p) return;
+  const v = (p.variants||[]).find(x => x.id===variantId); if (!v || v.stock<=0) return;
+  const ex = cart.find(x => x.id===pid && x.variantId===variantId);
+  if (ex) {
+    if (ex.qty >= v.stock) { showToast('已達「' + v.name + '」庫存上限'); return; }
+    ex.qty++;
+  } else {
+    cart.push({...p, qty:1, variantId: v.id, spec: v.name, variantStock: v.stock});
+  }
+  renderCartItems();
+}
+
+function cartKeyOf(it) { return it.variantId ? (it.id + '::' + it.variantId) : it.id; }
 
 function renderCartItems() {
   const el = ge('cp-items'); if (!el) return;
@@ -1248,26 +1304,33 @@ function renderCartItems() {
       '<div class="cit">' +
         '<div class="cn">' +
           '<div class="cn-nm">' + it.name + '</div>' +
+          (it.variantId ? '<div style="font-size:10.5px;color:var(--txt3);margin:1px 0 2px">規格：' + it.spec + '</div>' : '') +
           '<div class="cn-ct">' + ownerTag(it.owner) + '<span>' + it.cat + '</span></div>' +
         '</div>' +
         '<div class="cq">' +
-          '<button class="qb" data-pid="' + it.id + '" data-d="-1">−</button>' +
+          '<button class="qb" data-ck="' + cartKeyOf(it) + '" data-d="-1">−</button>' +
           '<span class="qn">' + it.qty + '</span>' +
-          '<button class="qb" data-pid="' + it.id + '" data-d="1">+</button>' +
+          '<button class="qb" data-ck="' + cartKeyOf(it) + '" data-d="1">+</button>' +
         '</div>' +
         '<div class="cpr">' + fm(it.price*it.qty) + '</div>' +
-        '<button class="dx" data-pid="' + it.id + '" data-d="-999">' + IC.x + '</button>' +
+        '<button class="dx" data-ck="' + cartKeyOf(it) + '" data-d="-999">' + IC.x + '</button>' +
       '</div>'
     ).join('');
-    el.querySelectorAll('[data-pid][data-d]').forEach(btn => {
-      btn.addEventListener('click', () => updateQty(btn.dataset.pid, parseInt(btn.dataset.d)));
+    el.querySelectorAll('[data-ck][data-d]').forEach(btn => {
+      btn.addEventListener('click', () => updateQty(btn.dataset.ck, parseInt(btn.dataset.d)));
     });
   }
   renderCartTotals();
 }
 
-function updateQty(pid, d) {
-  const i = cart.findIndex(x => x.id===pid); if (i<0) return;
+function updateQty(ck, d) {
+  const i = cart.findIndex(x => cartKeyOf(x)===ck); if (i<0) return;
+  if (d > 0) {
+    const it = cart[i];
+    const p = products.find(x => x.id===it.id);
+    const cap = it.variantId ? (p?.variants||[]).find(v=>v.id===it.variantId)?.stock : p?.stock;
+    if (cap != null && it.qty >= cap) { showToast('已達庫存上限'); return; }
+  }
   cart[i].qty = Math.max(0, cart[i].qty + d);
   if (cart[i].qty === 0) cart.splice(i,1);
   renderCartItems();
@@ -1438,14 +1501,23 @@ async function doCheckout(orderNote, cashPaid) {
   const changeAmt = (payMethod==='現金' && cashPaid > 0) ? Math.max(0, cashPaid - tot) : 0;
   const order = {
     id: genId(), date: today(), customer, memberId,
-    items: cart.map(x => ({name:x.name,qty:x.qty,price:x.price,cat:x.cat,owner:x.owner,spec:x.spec||'',refunded:false})),
+    items: cart.map(x => ({name:x.name,qty:x.qty,price:x.price,cat:x.cat,owner:x.owner,spec:x.spec||'',pid:x.id,variantId:x.variantId||null,refunded:false})),
     total: tot, sub, discPct: discount, discAmt: dAmt, discFix: discountFix,
     ptDeduct, ptsEarned: cartMember ? Math.floor(sub/100) : 0, redeemIds: [...redeemIds],
     note: orderNote, cashPaid, changeAmt,
     status: '完成', payment: payMethod
   };
   orders.unshift(order);
-  cart.forEach(c => { const p=products.find(x=>x.id===c.id); if(p) p.stock=Math.max(0,p.stock-c.qty); });
+  cart.forEach(c => {
+    const p=products.find(x=>x.id===c.id); if(!p) return;
+    if (c.variantId) {
+      const v = (p.variants||[]).find(x=>x.id===c.variantId);
+      if (v) v.stock = Math.max(0, v.stock - c.qty);
+      p.stock = (p.variants||[]).reduce((s,x)=>s+x.stock, 0);
+    } else {
+      p.stock = Math.max(0, p.stock - c.qty);
+    }
+  });
   if (cartMember) {
     const ptsUsed = ptDeduct * shopConfig.pointsRate;          // 折抵消耗的點數
     const ptsEarned = Math.floor(sub/100);                     // 本次消費累積點數（以小計為準，不受折扣影響）
@@ -1582,7 +1654,7 @@ function renderInvTable() {
     const gr = Math.round(((p.price-p.cost)/p.price)*100);
     return '<tr class="' + (p.stock<=p.lowStock?'rw':'') + '">' +
       '<td class="cb-td" style="width:36px;padding:8px 6px;text-align:center"><input type="checkbox" class="row-cb" data-id="' + p.id + '" onclick="event.stopPropagation()"></td>' +
-      '<td style="font-weight:600;min-width:120px;white-space:normal">' + p.name + (p.spec?'<div style="font-size:11px;color:var(--txt3);font-weight:400;margin-top:2px">'+p.spec+'</div>':'') + '</td>' +
+      '<td style="font-weight:600;min-width:120px;white-space:normal">' + p.name + (p.variants&&p.variants.length?'<div style="font-size:10.5px;color:var(--gold,#a67c3d);font-weight:600;margin-top:2px">🎨 '+p.variants.length+' 種規格</div>':(p.spec?'<div style="font-size:11px;color:var(--txt3);font-weight:400;margin-top:2px">'+p.spec+'</div>':'')) + '</td>' +
       '<td>' + ownerTag(p.owner) + '</td>' +
       '<td><span class="bdg bi">' + p.cat + '</span></td>' +
       '<td class="tn">' + fm(p.price) + '</td>' +
@@ -1775,6 +1847,7 @@ function openRedeemModal(rid) {
 function openRestockModal(id) {
   const p = products.find(x => x.id === id);
   if (!p) return;
+  const hasVariants = p.variants && p.variants.length > 0;
   const ov = document.createElement('div'); ov.className = 'ovm';
   ov.innerHTML =
     '<div class="modal" style="max-width:380px">' +
@@ -1782,9 +1855,10 @@ function openRestockModal(id) {
       '<div class="mbd">' +
         '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;margin-bottom:14px;background:var(--p2);border-radius:var(--r);padding:10px 14px">' +
           '<span style="font-size:13px;color:var(--txt2)">目前庫存</span>' +
-          '<strong style="font-family:var(--en);font-size:18px;color:var(--cr);margin-left:auto">' + p.stock + ' <span style="font-size:13px;font-weight:400;color:var(--txt3)">' + p.unit + '</span></strong>' +
+          '<strong style="font-family:var(--en);font-size:18px;color:var(--cr);margin-left:auto" id="rs-cur-stock">' + p.stock + ' <span style="font-size:13px;font-weight:400;color:var(--txt3)">' + p.unit + '</span></strong>' +
         '</div>' +
-        '<div class="fg"><label>進貨數量</label><input class="fi" type="number" id="rs-qty" min="1" placeholder="請輸入數量" autofocus></div>' +
+        (hasVariants ? '<div class="fg"><label>選擇規格</label><select class="fs" id="rs-variant">' + p.variants.map(v=>'<option value="'+v.id+'">'+v.name+'（目前 '+v.stock+' '+p.unit+'）</option>').join('') + '</select></div>' : '') +
+        '<div class="fg" style="margin-top:12px"><label>進貨數量</label><input class="fi" type="number" id="rs-qty" min="1" placeholder="請輸入數量" autofocus></div>' +
         '<div class="fg" style="margin-top:12px"><label>備註（選填）</label><input class="fi" id="rs-note" placeholder="例：向三豐補貨、特價入貨…"></div>' +
       '</div>' +
       '<div class="mft"><button class="btn btn-o" id="rs-cancel">取消</button><button class="btn btn-p" id="rs-save">' + IC.check + ' 確認進貨</button></div>' +
@@ -1794,6 +1868,12 @@ function openRestockModal(id) {
   const close = () => ov.remove();
   ge('rs-x').addEventListener('click', close);
   ge('rs-cancel').addEventListener('click', close);
+  if (hasVariants) {
+    ge('rs-variant').addEventListener('change', function() {
+      const v = p.variants.find(x=>x.id===this.value);
+      ge('rs-cur-stock').innerHTML = (v?v.stock:0) + ' <span style="font-size:13px;font-weight:400;color:var(--txt3)">' + p.unit + '</span>';
+    });
+  }
   ge('rs-save').addEventListener('click', () => {
     const qty = parseInt(ge('rs-qty').value);
     if (!qty || qty <= 0) { showToast('請輸入有效進貨數量'); return; }
@@ -1804,11 +1884,25 @@ function openRestockModal(id) {
       String(now.getDate()).padStart(2,'0') + ' ' +
       String(now.getHours()).padStart(2,'0') + ':' +
       String(now.getMinutes()).padStart(2,'0');
-    restockLog.unshift({ id: genId(), pid: p.id, name: p.name, owner: p.owner, qty, before: p.stock, after: p.stock + qty, ts, note });
-    p.stock += qty;
+    let before, after, variantId = null, variantName = '';
+    if (hasVariants) {
+      variantId = ge('rs-variant').value;
+      const v = p.variants.find(x=>x.id===variantId);
+      if (!v) { showToast('請選擇規格'); return; }
+      variantName = v.name;
+      before = v.stock;
+      v.stock += qty;
+      after = v.stock;
+      p.stock = p.variants.reduce((s,x)=>s+x.stock,0);
+    } else {
+      before = p.stock;
+      p.stock += qty;
+      after = p.stock;
+    }
+    restockLog.unshift({ id: genId(), pid: p.id, name: p.name + (variantName?'（'+variantName+'）':''), owner: p.owner, qty, before, after, ts, note });
     saveToLocal();
     close();
-    showToast('✅ ' + p.name + ' 已進貨 +' + qty + p.unit + '，現庫存 ' + p.stock + p.unit);
+    showToast('✅ ' + p.name + (variantName?'（'+variantName+'）':'') + ' 已進貨 +' + qty + p.unit + '，現庫存 ' + (hasVariants?after:p.stock) + p.unit);
     renderInvTable();
   });
 }
@@ -1854,6 +1948,7 @@ function openRestockLog() {
 function openProdModal(id) {
   const p = id ? products.find(x => x.id===id) : null;
   const cats = [...new Set(products.map(x=>x.cat))];
+  let editVariants = (p?.variants || []).map(v => ({...v}));
   const ov = document.createElement('div'); ov.className='ovm';
   ov.innerHTML =
     '<div class="modal">' +
@@ -1869,12 +1964,20 @@ function openProdModal(id) {
           '<div class="fg" style="margin:0"><label>成本（元）</label><input class="fi" type="number" id="pf-co" placeholder="0" value="' + (p?.cost||'') + '"></div>' +
         '</div>' +
         '<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">' +
-          '<div class="fg" style="margin:0"><label>庫存數量</label><input class="fi" type="number" id="pf-st" placeholder="0" value="' + (p?.stock||'') + '"></div>' +
+          '<div class="fg" style="margin:0"><label id="pf-st-lbl">庫存數量</label><input class="fi" type="number" id="pf-st" placeholder="0" value="' + (p?.stock||'') + '"></div>' +
           '<div class="fg" style="margin:0"><label>單位</label><input class="fi" id="pf-un" placeholder="個" value="' + (p?.unit||'') + '"></div>' +
         '</div>' +
         '<div class="fg" style="margin:0"><label>低庫存警示值</label><input class="fi" type="number" id="pf-lo" value="' + (p?.lowStock||5) + '"></div>' +
         '<div class="fg" style="margin:0"><label>條碼 / SKU</label><input class="fi" id="pf-bc" placeholder="選填" value="' + (p?.barcode||'') + '"></div>' +
         '<div class="fg" style="margin:0"><label>規格說明 <span style="font-size:11px;font-weight:400;color:var(--txt3)">（選填，例：顏色、尺寸、材質…）</span></label><textarea class="fi" id="pf-sp" rows="3" placeholder="例：黑色 / 30cm×20cm / 棉質" style="resize:vertical;line-height:1.6;min-height:72px">' + (p?.spec||'') + '</textarea></div>' +
+        '<div class="fg" style="margin:0;padding-top:6px;border-top:1px solid var(--bd)">' +
+          '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600"><input type="checkbox" id="pf-var-toggle" style="width:16px;height:16px"' + (editVariants.length?' checked':'') + '> 這個商品有多種規格可選（例如顏色、尺寸），結帳前要讓客人先選規格</label>' +
+        '</div>' +
+        '<div id="pf-variants-wrap" style="display:none;flex-direction:column;gap:8px;padding:12px;background:var(--p2);border-radius:var(--r)">' +
+          '<div id="pf-var-list" style="display:flex;flex-direction:column;gap:6px"></div>' +
+          '<button type="button" class="btn btn-o btn-sm" id="pf-var-add" style="align-self:flex-start">＋ 新增規格</button>' +
+          '<div style="font-size:11px;color:var(--txt3)">每個規格可以各自設定庫存，上面的「庫存數量」會自動變成所有規格的加總，不用手動填。</div>' +
+        '</div>' +
       '</div>' +
       '<div class="mft"><button class="btn btn-o" id="pm-cancel">取消</button><button class="btn btn-p" id="pm-save">' + IC.check + ' 儲存</button></div>' +
     '</div>';
@@ -1882,11 +1985,64 @@ function openProdModal(id) {
   const close = () => ov.remove();
   ov.querySelector('#pm-x').addEventListener('click', close);
   ov.querySelector('#pm-cancel').addEventListener('click', close);
+
+  const varWrap = ov.querySelector('#pf-variants-wrap');
+  const varList = ov.querySelector('#pf-var-list');
+  const stInput = ov.querySelector('#pf-st');
+  const stLbl   = ov.querySelector('#pf-st-lbl');
+  const toggle  = ov.querySelector('#pf-var-toggle');
+
+  function renderVarRows() {
+    varList.innerHTML = editVariants.map((v,i) =>
+      '<div style="display:flex;gap:6px;align-items:center" data-vi="'+i+'">' +
+        '<input class="fi var-nm" data-vi="'+i+'" placeholder="規格名稱，例：紅色 / M 號" value="'+(v.name||'')+'" style="flex:2">' +
+        '<input class="fi var-st" data-vi="'+i+'" type="number" placeholder="庫存" value="'+(v.stock??0)+'" style="flex:1;min-width:0">' +
+        '<button type="button" class="btn-g var-del" data-vi="'+i+'" style="flex:none;color:#b71c1c">' + IC.x + '</button>' +
+      '</div>'
+    ).join('') || '<div style="font-size:12px;color:var(--txt3)">尚未新增規格，點下方按鈕新增第一個</div>';
+  }
+  function syncStockTotal() {
+    if (toggle.checked) {
+      const total = editVariants.reduce((s,v)=>s+(parseInt(v.stock)||0),0);
+      stInput.value = total;
+      stInput.disabled = true;
+      stLbl.textContent = '庫存數量（自動加總）';
+    } else {
+      stInput.disabled = false;
+      stLbl.textContent = '庫存數量';
+    }
+  }
+  function refreshVarUI() {
+    varWrap.style.display = toggle.checked ? 'flex' : 'none';
+    renderVarRows();
+    syncStockTotal();
+  }
+  toggle.addEventListener('change', refreshVarUI);
+  ov.querySelector('#pf-var-add').addEventListener('click', () => {
+    editVariants.push({ id: 'V'+Date.now()+Math.random().toString(36).slice(2,6), name:'', stock:0 });
+    renderVarRows(); syncStockTotal();
+  });
+  varList.addEventListener('input', e => {
+    const vi = e.target.dataset.vi; if (vi === undefined) return;
+    if (e.target.classList.contains('var-nm')) editVariants[vi].name = e.target.value;
+    if (e.target.classList.contains('var-st')) { editVariants[vi].stock = parseInt(e.target.value)||0; syncStockTotal(); }
+  });
+  varList.addEventListener('click', e => {
+    const btn = e.target.closest('.var-del'); if (!btn) return;
+    editVariants.splice(parseInt(btn.dataset.vi), 1);
+    renderVarRows(); syncStockTotal();
+  });
+  refreshVarUI();
+
   ov.querySelector('#pm-save').addEventListener('click', () => {
     let cat = ge('pf-cat').value;
     if (cat === '_new') { cat = prompt('輸入新分類名稱：') || '其他'; }
-    const data = {name:ge('pf-nm').value.trim(),cat,owner:ge('pf-own').value,price:+ge('pf-pr').value,cost:+ge('pf-co').value,stock:+ge('pf-st').value,unit:ge('pf-un').value.trim(),lowStock:+ge('pf-lo').value||5,barcode:ge('pf-bc').value.trim(),spec:ge('pf-sp').value.trim()};
+    const useVariants = toggle.checked;
+    const finalVariants = useVariants ? editVariants.filter(v => v.name && v.name.trim()).map(v => ({id:v.id, name:v.name.trim(), stock:Math.max(0,parseInt(v.stock)||0)})) : [];
+    const stockVal = useVariants ? finalVariants.reduce((s,v)=>s+v.stock,0) : (+ge('pf-st').value || 0);
+    const data = {name:ge('pf-nm').value.trim(),cat,owner:ge('pf-own').value,price:+ge('pf-pr').value,cost:+ge('pf-co').value,stock:stockVal,unit:ge('pf-un').value.trim(),lowStock:+ge('pf-lo').value||5,barcode:ge('pf-bc').value.trim(),spec:ge('pf-sp').value.trim(),variants:finalVariants};
     if (!data.name||!data.price) { alert('請填寫商品名稱與售價'); return; }
+    if (useVariants && !finalVariants.length) { alert('已勾選「有多種規格」，請至少新增一個規格選項，或取消勾選'); return; }
     if (id) { const i=products.findIndex(p=>p.id===id); products[i]={...products[i],...data}; }
     else { const maxOrder = products.reduce((m,p) => Math.max(m, p.sortOrder??0), -1); products.push({id:'P'+Date.now(),...data, sortOrder: maxOrder+1}); }
     close(); saveToLocal(); PF.inventory();
@@ -2116,10 +2272,7 @@ PF.orders = function() {
         }
         // restore stock（瑕疵商品不還原）
         if (!defective) {
-          o.items.forEach(it => {
-            const prod = products.find(p => p.name===it.name);
-            if (prod) prod.stock += it.qty;
-          });
+          o.items.forEach(it => restoreStock(it, it.qty));
         }
         if (selOrder?.id===o.id) selOrder = o;
         saveToLocal();
@@ -2163,8 +2316,7 @@ PF.orders = function() {
         else if (note) ord.refundNote += '；' + note;
         // 瑕疵商品不還原庫存
         if (!defective) {
-          const prod = products.find(p => p.name===item.name);
-          if (prod) prod.stock += refundQty;
+          restoreStock(item, refundQty);
         }
         // 全部都退完 → 退款；有部分退款 → 部分退款（讓已退款頁面看得到）
         const allFullyRefunded = ord.items.every(it => (it.refundedQty||0) >= it.qty);
@@ -3370,15 +3522,30 @@ function renderSellShipReport() {
 
 function exportSellShipCSV() {
   if (typeof XLSX === 'undefined') { showToast('試算表套件尚未載入，請稍後再試'); return; }
-  const posOrders = orders.filter(o => o.status === '完成');
+  const posOrders = orders.filter(o => o.status === '完成' || o.status === '部分退款');
   const headers = ['來源','日期','訂單編號','客戶/買家','付款方式','商品金額','賣場名稱'];
   const allRows = [
     ...posOrders.map(o => ['門市', o.date, o.id, o.customer, o.payment, o.total, '']),
     ...externalOrders.map(o => ['賣貨便', o.date, o.sourceId, o.buyer, o.payment, (o.netRevenue != null ? o.netRevenue : (o.total || o.subtotal)), o.shopName]),
   ].sort((a,b) => b[1].localeCompare(a[1]));
+  if (!allRows.length) { showToast('尚無資料可匯出'); return; }
 
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...allRows]);
-  ws['!cols'] = [{wch:8},{wch:11},{wch:14},{wch:14},{wch:10},{wch:12},{wch:16}];
+  // 依月份分組，加月小計，最後加總計
+  const aoa = [headers];
+  const months = [...new Set(allRows.map(r => (r[1]||'').slice(0,7)))].sort().reverse();
+  let grandTotal = 0;
+  months.forEach(m => {
+    const monthRows = allRows.filter(r => (r[1]||'').slice(0,7)===m);
+    monthRows.forEach(r => aoa.push(r));
+    const monthTotal = monthRows.reduce((s,r) => s + (Number(r[5])||0), 0);
+    grandTotal += monthTotal;
+    aoa.push(['','','','','',m+' 當月總計',monthTotal]);
+    aoa.push([]);
+  });
+  aoa.push(['','','','','','全部總計',grandTotal]);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{wch:8},{wch:11},{wch:14},{wch:14},{wch:10},{wch:14},{wch:16}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, '月結報表');
   XLSX.writeFile(wb, 'WM熊窩_月結報表_' + today() + '.xlsx');
