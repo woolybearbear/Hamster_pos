@@ -791,8 +791,32 @@ function showSyncStatus(msg) {
   el.style.opacity = '1';
   if (msg.startsWith('✅')) {
     setTimeout(() => { el.style.opacity = '0'; }, 3000);
+    hideSyncFailBanner();
+  } else if (msg.startsWith('⚠')) {
+    showSyncFailBanner();
   }
 }
+
+// ── 雲端同步失敗時的頂部提醒條：提供「立即下載備份」，避免關頁/刷新後資料遺失 ──
+function showSyncFailBanner() {
+  let bar = document.getElementById('sync-fail-banner');
+  if (bar) return; // 已經顯示中，不重複建立
+  bar = document.createElement('div');
+  bar.id = 'sync-fail-banner';
+  bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:300;background:#fdecea;border-bottom:1px solid #f5c0bd;color:#b71c1c;font-size:12.5px;padding:8px 14px;display:flex;align-items:center;gap:10px;justify-content:center;flex-wrap:wrap;font-family:var(--zh);box-shadow:0 2px 10px rgba(0,0,0,.08)';
+  bar.innerHTML =
+    '<span>⚠ 雲端同步失敗（可能是今日額度已用完），目前變更只存在這台裝置，關閉或整理頁面前建議先備份</span>' +
+    '<button id="sync-fail-backup-btn" style="background:#b71c1c;color:#fff;border:none;border-radius:8px;padding:5px 14px;font-size:12px;cursor:pointer;font-family:var(--zh);flex-shrink:0">立即下載備份</button>' +
+    '<button id="sync-fail-dismiss" style="background:none;border:none;color:#b71c1c;font-size:17px;cursor:pointer;padding:0 6px;line-height:1;flex-shrink:0">×</button>';
+  document.body.appendChild(bar);
+  bar.querySelector('#sync-fail-backup-btn').addEventListener('click', () => exportBackup());
+  bar.querySelector('#sync-fail-dismiss').addEventListener('click', () => bar.remove());
+}
+
+function hideSyncFailBanner() {
+  document.getElementById('sync-fail-banner')?.remove();
+}
+
 
 const AUTH_CODE_KEY = 'wm_auth_code';
 function getAuthCode() { return localStorage.getItem(AUTH_CODE_KEY) || '2026'; }
