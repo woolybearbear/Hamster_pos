@@ -658,14 +658,15 @@ async function pushAllToFB() {
     saveDocToFB('config', 'shopConfig', shopConfig),
     saveDocToFB('config', 'tierConfig', { tiers: tierConfig }),
   ]);
-  // 上面只會新增/更新，這裡才會真正把本機已刪除、但雲端還留著的資料清掉
-  await Promise.all([
-    syncDeletesFB('products', products),
-    syncDeletesFB('members', members),
-    syncDeletesFB('orders', orders),
-    syncDeletesFB('employees', employees),
-    syncDeletesFB('restockLog', restockLog),
-  ]);
+  // 注意：這裡刻意不做「整批比對雲端、刪掉本機沒有的資料」──
+  // 在多裝置同步情境下，這台裝置的本機記憶不一定是最新的（例如另一台裝置剛新增、
+  // 還沒同步回來），用差集去刪雲端資料會誤刪別台裝置剛新增的東西。
+  // 真正的刪除一律由使用者按下刪除鈕時，呼叫 deleteDocFromFB() 針對「那一筆」直接刪除。
+}
+
+// ── 手動清理：把雲端上「所有裝置都已經看不到」的孤兒資料清掉（僅在資料管理頁手動觸發，不會自動跑）──
+async function manualCleanupOrphans(colName, localArr, idField = 'id') {
+  return syncDeletesFB(colName, localArr, idField);
 }
 
 // ── 即時監聽（讓兩台裝置同步）──
@@ -814,6 +815,12 @@ const today = () => {
     String(d.getMonth()+1).padStart(2,'0') + '-' +
     String(d.getDate()).padStart(2,'0');
 };
+// 把任意 Date 物件轉成「本地時區」的 YYYY-MM-DD，取代會誤用 UTC 時間的 toISOString().slice(0,10)
+function localDateStr(d) {
+  return d.getFullYear() + '-' +
+    String(d.getMonth()+1).padStart(2,'0') + '-' +
+    String(d.getDate()).padStart(2,'0');
+}
 
 function genId() {
   const d = new Date();
@@ -875,7 +882,7 @@ function getAvgInterval(mid) {
 
 
 // ── Bulk Select Helper ──
-function makeBulkBar(wrapId, getItems, deleteFn, afterFn) {
+function makeBulkBar(wrapId, getItems, deleteFn, afterFn, colName) {
   const wrap = ge(wrapId);
   if (!wrap) return;
 
@@ -927,13 +934,17 @@ function makeBulkBar(wrapId, getItems, deleteFn, afterFn) {
   // delete
   const delBtn = wrap.querySelector('.bulk-del-btn');
   if (delBtn) {
-    delBtn.addEventListener('click', () => {
+    delBtn.addEventListener('click', async () => {
       const ids = getCheckedIds();
       if (!ids.length) return;
       if (!confirm('確定刪除選取的 ' + ids.length + ' 筆資料？')) return;
       deleteFn(ids);
       saveToLocal();
       afterFn();
+      if (fbReady && colName) {
+        try { await Promise.all(ids.map(id => deleteDocFromFB(colName, id))); }
+        catch(e) { console.warn('批次雲端刪除失敗:', e); }
+      }
     });
   }
 
@@ -1700,7 +1711,8 @@ function renderInvTable() {
   makeBulkBar('inv-wrap',
     () => list.map(p => p.id),
     ids => { products = products.filter(p => !ids.includes(p.id)); },
-    () => renderInvTable()
+    () => renderInvTable(),
+    'products'
   );
 }
 
@@ -2125,7 +2137,7 @@ PF.orders = function() {
   // 計算快捷日期
   const _today = today();
   const _wd = new Date(); _wd.setDate(_wd.getDate() - _wd.getDay() + 1); // 本週一
-  const _weekStart = _wd.toISOString().slice(0,10);
+  const _weekStart = localDateStr(_wd);
   const _monthStart = _today.slice(0,7) + '-01';
 
   ge('pg').innerHTML =
@@ -2347,7 +2359,8 @@ PF.orders = function() {
       if (selOrder && ids.includes(selOrder.id)) selOrder = null;
       orders = orders.filter(o => !ids.includes(o.id));
     },
-    () => PF.orders()
+    () => PF.orders(),
+    'orders'
   );
 };
 
@@ -2388,9 +2401,9 @@ function openOrderExportModal() {
   const _today = today();
   const _thisMonthStart = _today.slice(0,7) + '-01';
   const _lastMonthDate = new Date(); _lastMonthDate.setDate(1); _lastMonthDate.setMonth(_lastMonthDate.getMonth()-1);
-  const _lastMonthStart = _lastMonthDate.toISOString().slice(0,7) + '-01';
+  const _lastMonthStart = localDateStr(_lastMonthDate).slice(0,7) + '-01';
   const _lastMonthEndDate = new Date(_lastMonthDate.getFullYear(), _lastMonthDate.getMonth()+1, 0);
-  const _lastMonthEnd = _lastMonthEndDate.toISOString().slice(0,10);
+  const _lastMonthEnd = localDateStr(_lastMonthEndDate);
 
   const ov = document.createElement('div'); ov.className = 'ovm';
   ov.innerHTML =
@@ -2471,7 +2484,7 @@ PF.reports = function() {
   const DAY_LABELS = ['日','一','二','三','四','五','六'];
   const days = Array.from({length:7}, (_,i) => {
     const d = new Date(); d.setDate(d.getDate() - (6 - i));
-    const dateStr = d.toISOString().slice(0,10);
+    const dateStr = localDateStr(d);
     const v = done.filter(o=>o.date===dateStr).reduce((s,o)=>s+o.total,0);
     return { l: (d.getMonth()+1)+'/'+ d.getDate(), sub: '週'+DAY_LABELS[d.getDay()], v };
   });
@@ -2834,7 +2847,8 @@ function renderMbrTable() {
   makeBulkBar('mbr-wrap',
     () => members.map(m => m.id),
     ids => { members = members.filter(m => !ids.includes(m.id)); },
-    () => PF.members()
+    () => PF.members(),
+    'members'
   );
 }
 
@@ -3560,7 +3574,7 @@ PF.datamanage = function() {
     lsSize = Math.round(lsRaw.length / 1024 * 10) / 10;
     try {
       const d = JSON.parse(lsRaw);
-      const dt = (d.savedAt||'').slice(0,16).replace('T',' ');
+      const dt = d.savedAt ? new Date(d.savedAt).toLocaleString('zh-TW', {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).replace(/\//g,'-') : '';
       lsInfo = '最後儲存：' + dt + '（約 ' + lsSize + ' KB）';
     } catch(e) { lsInfo = '資料格式異常'; }
   }
@@ -3809,7 +3823,8 @@ function renderEmpTable() {
   makeBulkBar('emp-wrap',
     () => employees.map(e => e.id),
     ids => { employees = employees.filter(e => !ids.includes(e.id)); },
-    () => renderEmpTable()
+    () => renderEmpTable(),
+    'employees'
   );
 }
 
@@ -3919,7 +3934,7 @@ function importBackup(file) {
       // ── 版本比對：偵測缺少的新欄位 ──
       const CURRENT_VERSION = '3.0';
       const backupVersion   = data._version || '1.0';
-      const exportedAt      = (data._exportedAt || '').slice(0, 10);
+      const exportedAt      = data._exportedAt ? localDateStr(new Date(data._exportedAt)) : '';
       const missing = [];
       if (!data.restockLog)              missing.push('進貨紀錄（restockLog）');
       if (!data.shopConfig?.redeemItems) missing.push('兌換獎勵清單（redeemItems）');
