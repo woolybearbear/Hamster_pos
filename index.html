@@ -3148,6 +3148,7 @@ PF.settings = function() {
 
   ge('add-tier-btn').addEventListener('click', () => {
     tierConfig.push({id:Date.now(),name:'新等級',minSpend:0,discPct:0,color:'#333',bg:'#f5f5f5',border:'#ddd'});
+    saveToLocal();
     renderTierCards();
   });
 };
@@ -3847,6 +3848,7 @@ function openEmpModal() {
     const name = ge('ef-nm').value.trim(), role = ge('ef-rl').value;
     if (!name) { alert('請輸入姓名'); return; }
     employees.push({id:'E'+Date.now(),name,role,status:'在職'});
+    saveToLocal();
     close(); PF.employees();
   });
 }
