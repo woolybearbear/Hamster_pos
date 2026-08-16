@@ -536,6 +536,10 @@ let fbReady = false;
 let fbListeners = []; // 儲存 unsubscribe functions
 let pendingFBWrites = 0; // 尚未完成的雲端寫入次數，用來提醒使用者「同步中先別關頁面」
 
+// ── 上次已同步到雲端的資料快照（用來比對出「真正變動過」的項目，避免整批集合重寫爆用量）──
+let lastSyncedSnapshot = { products: [], members: [], orders: [], employees: [], restockLog: [], shopConfig: {}, tierConfig: [] };
+let syncDebounceTimer = null;
+
 // ── Firestore 集合參照 ──
 const COL = {
   products:   () => db && db.collection('products'),
@@ -629,12 +633,19 @@ async function loadFromFB() {
       if (!shopConfig.redeemItems) shopConfig.redeemItems = [];
       if (!shopConfig.owners || shopConfig.owners.length < 2) shopConfig.owners = ['Wooly', 'MuMu'];
       products.forEach((p, i) => { if (p.sortOrder === undefined) p.sortOrder = i; });
+      // 這批資料本來就來自雲端，標記為「已同步」基準，避免等一下又原封不動寫回去浪費用量
+      lastSyncedSnapshot = {
+        products: sanitize(products), members: sanitize(members), orders: sanitize(orders),
+        employees: sanitize(employees), restockLog: sanitize(restockLog),
+        shopConfig: sanitize(shopConfig), tierConfig: sanitize(tierConfig),
+      };
       saveToLocal(); // 同步到 localStorage 備援
       showSyncStatus('✅ 已同步');
       fbReady = true;
       return true;
     } else {
       // Firestore 是空的 → 全新開始（不自動上傳本機舊資料，避免污染雲端）
+      lastSyncedSnapshot = { products: [], members: [], orders: [], employees: [], restockLog: [], shopConfig: sanitize(shopConfig), tierConfig: sanitize(tierConfig) };
       showSyncStatus('✅ 全新開始');
       fbReady = true;
       return false;
@@ -664,6 +675,62 @@ async function pushAllToFB() {
   // 真正的刪除一律由使用者按下刪除鈕時，呼叫 deleteDocFromFB() 針對「那一筆」直接刪除。
 }
 
+// ── 找出某集合裡「和上次已同步快照相比，內容真的不一樣」的項目 ──
+function diffChanged(colName, arr, idField = 'id') {
+  const prevArr = lastSyncedSnapshot[colName] || [];
+  const prevMap = new Map(prevArr.map(x => [x[idField], JSON.stringify(x)]));
+  return arr.filter(item => prevMap.get(item[idField]) !== JSON.stringify(sanitize(item)));
+}
+
+// ── 只把「真正變動過」的項目寫回 Firestore，取代整批集合重寫（大幅降低寫入次數/用量）──
+async function syncChangedToFB() {
+  if (!db) return;
+  try {
+    const colData = { products, members, orders, employees, restockLog };
+    const jobs = [];
+    Object.keys(colData).forEach(colName => {
+      const changed = diffChanged(colName, colData[colName]);
+      if (changed.length) jobs.push(saveCollectionToFB(colName, changed));
+    });
+    if (JSON.stringify(sanitize(shopConfig)) !== JSON.stringify(lastSyncedSnapshot.shopConfig)) {
+      jobs.push(saveDocToFB('config', 'shopConfig', shopConfig));
+    }
+    if (JSON.stringify(sanitize(tierConfig)) !== JSON.stringify(lastSyncedSnapshot.tierConfig)) {
+      jobs.push(saveDocToFB('config', 'tierConfig', { tiers: tierConfig }));
+    }
+    if (!jobs.length) return; // 沒有任何變動，完全不打 Firestore，節省額度
+    await Promise.all(jobs);
+    // 寫入成功後，把這次的內容標記為「已同步」基準
+    lastSyncedSnapshot = {
+      products: sanitize(products), members: sanitize(members), orders: sanitize(orders),
+      employees: sanitize(employees), restockLog: sanitize(restockLog),
+      shopConfig: sanitize(shopConfig), tierConfig: sanitize(tierConfig),
+    };
+  } catch(e) { console.warn('syncChangedToFB error:', e); throw e; }
+}
+
+// ── 標記單一項目為「已同步」，避免直接寫入 Firestore 後、防抖排程又重複寫一次同樣的東西 ──
+function markItemSynced(colName, item, idField = 'id') {
+  const clean = sanitize(item);
+  const arr = (lastSyncedSnapshot[colName] || []).slice();
+  const idx = arr.findIndex(x => x[idField] === item[idField]);
+  if (idx >= 0) arr[idx] = clean; else arr.push(clean);
+  lastSyncedSnapshot[colName] = arr;
+}
+
+// ── 防抖排程：短時間內連續編輯（例如打字）只會合併成一次雲端寫入 ──
+function scheduleSync() {
+  pendingFBWrites++; // 排程期間也視為「有未完成的同步」，避免使用者在防抖等待中關頁
+  clearTimeout(syncDebounceTimer);
+  syncDebounceTimer = setTimeout(() => {
+    showSyncStatus('🔄 同步中…');
+    syncChangedToFB()
+      .then(() => showSyncStatus('✅ 已同步 ' + new Date().toLocaleTimeString('zh-TW', {hour:'2-digit',minute:'2-digit'})))
+      .catch(() => showSyncStatus('⚠ 同步失敗，請確認網路'))
+      .finally(() => { pendingFBWrites = Math.max(0, pendingFBWrites-1); });
+  }, 800);
+}
+
 // ── 手動清理：把雲端上「所有裝置都已經看不到」的孤兒資料清掉（僅在資料管理頁手動觸發，不會自動跑）──
 async function manualCleanupOrphans(colName, localArr, idField = 'id') {
   return syncDeletesFB(colName, localArr, idField);
@@ -680,7 +747,10 @@ function startRealtimeSync() {
     const unsub = db.collection(colName).onSnapshot(snap => {
       if (!fbReady) return;
       const data = snap.docs.map(d => { const item = d.data(); if (!item.id) item.id = d.id; return item; });
-      setter(transform ? transform(data) : data);
+      const finalData = transform ? transform(data) : data;
+      setter(finalData);
+      // 這筆資料本來就是從雲端來的，標記為「已同步」基準，避免防抖排程又原封不動寫回去浪費用量
+      lastSyncedSnapshot[colName] = sanitize(finalData);
       saveToLocal();
       // 重新渲染目前頁面
       const curPage = document.querySelector('.ni.on')?.dataset.page;
@@ -701,6 +771,9 @@ function startRealtimeSync() {
       if (doc.id === 'shopConfig')  Object.assign(shopConfig, doc.data());
       if (doc.id === 'tierConfig')  tierConfig = doc.data().tiers || tierConfig;
     });
+    // 同樣標記為已同步基準，避免寫回去
+    lastSyncedSnapshot.shopConfig = sanitize(shopConfig);
+    lastSyncedSnapshot.tierConfig = sanitize(tierConfig);
     saveToLocal();
   });
 }
@@ -1545,7 +1618,7 @@ async function doCheckout(orderNote, cashPaid) {
   saveToLocal();
   // 直接、單獨把這筆新訂單寫入雲端並等待完成，確保結帳完成畫面出現前，訂單已經確實同步（不是只排隊等整批同步跑完）
   if (fbReady) {
-    try { await saveDocToFB('orders', order.id, order); }
+    try { await saveDocToFB('orders', order.id, order); markItemSynced('orders', order); }
     catch(e) { console.warn('訂單同步失敗:', e); showToast('⚠ 訂單已存本機，但雲端同步失敗，請確認網路'); }
   }
   showReceiptModal(order, cm);
@@ -2236,7 +2309,7 @@ PF.orders = function() {
     saveToLocal();
     // 直接、單獨寫入這一筆訂單到雲端並等待完成，避免整批同步還沒跑完就被使用者刷新蓋掉
     if (fbReady && ord) {
-      try { await saveDocToFB('orders', ord.id, ord); }
+      try { await saveDocToFB('orders', ord.id, ord); markItemSynced('orders', ord); }
       catch(e) { console.warn('備註同步失敗:', e); showToast('⚠ 備註已存本機，但雲端同步失敗，請確認網路'); }
     }
     showToast('備註已更新');
@@ -2255,7 +2328,7 @@ PF.orders = function() {
     const o = orders.find(x=>x.id===b.dataset.oid); if(o) o.status='完成';
     if (selOrder?.id===b.dataset.oid) selOrder.status='完成';
     saveToLocal();
-    if (fbReady && o) { try { await saveDocToFB('orders', o.id, o); } catch(e) { console.warn(e); } }
+    if (fbReady && o) { try { await saveDocToFB('orders', o.id, o); markItemSynced('orders', o); } catch(e) { console.warn(e); } }
     PF.orders();
   }));
   ge('pg').querySelectorAll('.ord-ref').forEach(b => b.addEventListener('click', e => {
@@ -2288,7 +2361,7 @@ PF.orders = function() {
         }
         if (selOrder?.id===o.id) selOrder = o;
         saveToLocal();
-        if (fbReady) { try { await saveDocToFB('orders', o.id, o); } catch(e) { console.warn('退款同步失敗:', e); } }
+        if (fbReady) { try { await saveDocToFB('orders', o.id, o); markItemSynced('orders', o); } catch(e) { console.warn('退款同步失敗:', e); } }
         showToast('已退款：' + o.id);
         PF.orders();
       }
@@ -2346,7 +2419,7 @@ PF.orders = function() {
         }
         if (selOrder?.id===ord.id) selOrder = ord;
         saveToLocal();
-        if (fbReady) { try { await saveDocToFB('orders', ord.id, ord); } catch(e) { console.warn('退款同步失敗:', e); } }
+        if (fbReady) { try { await saveDocToFB('orders', ord.id, ord); markItemSynced('orders', ord); } catch(e) { console.warn('退款同步失敗:', e); } }
         showToast('已退款：' + item.name + ' ×' + refundQty + '　' + fm(refundAmt));
         PF.orders();
       }
@@ -3866,13 +3939,8 @@ function saveToLocal() {
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   } catch(e) { console.warn('儲存失敗:', e); }
-  // 同步到 Firebase（每次有任何更動都立即觸發，不等 60 秒排程）
-  if (fbReady) {
-    showSyncStatus('🔄 同步中…');
-    pushAllToFB()
-      .then(() => showSyncStatus('✅ 已同步 ' + new Date().toLocaleTimeString('zh-TW', {hour:'2-digit',minute:'2-digit'})))
-      .catch(e => { console.warn('FB sync error:', e); showSyncStatus('⚠ 同步失敗，請確認網路'); });
-  }
+  // 同步到 Firebase：只送出真正變動過的資料，並用防抖合併短時間內的多次編輯（大幅降低寫入用量）
+  if (fbReady) scheduleSync();
 }
 
 function loadFromLocal() {
@@ -3963,7 +4031,15 @@ function importBackup(file) {
           else restockLog = [];
           saveToLocal();
           if (fbReady) {
-            pushAllToFB().then(() => showToast('✅ 還原成功並同步至雲端（備份日期：' + exportedAt + '）'));
+            pushAllToFB().then(() => {
+              // 還原是整批覆蓋，寫完後把這份內容標記為已同步基準，避免之後又被誤判成「變動過」重寫一次
+              lastSyncedSnapshot = {
+                products: sanitize(products), members: sanitize(members), orders: sanitize(orders),
+                employees: sanitize(employees), restockLog: sanitize(restockLog),
+                shopConfig: sanitize(shopConfig), tierConfig: sanitize(tierConfig),
+              };
+              showToast('✅ 還原成功並同步至雲端（備份日期：' + exportedAt + '）');
+            });
           } else {
             showToast('✅ 還原成功（備份日期：' + exportedAt + '）');
           }
