@@ -437,6 +437,21 @@ input[type=checkbox]{accent-color:var(--cr);width:15px;height:15px;cursor:pointe
   </div>
 </div>
 
+<div id="role-gate" style="position:fixed;inset:0;z-index:9998;background:#FFFFFF;display:none;align-items:center;justify-content:center;font-family:var(--zh)">
+  <div style="background:#FFFFFF;border-radius:24px;padding:36px 32px;width:320px;text-align:center;box-shadow:0 4px 30px rgba(100,160,200,.15)">
+    <div style="font-size:15px;font-weight:700;color:var(--ink);margin-bottom:6px">請選擇目前的操作身份</div>
+    <div style="font-size:12px;color:var(--txt3);margin-bottom:22px">身份會決定你能使用哪些功能，直到重新整理頁面為止</div>
+    <button id="role-staff-btn" class="btn btn-o" style="width:100%;justify-content:center;border-radius:12px;padding:12px;margin-bottom:10px">🧑‍💼 店員模式</button>
+    <button id="role-owner-btn" class="btn btn-p" style="width:100%;justify-content:center;border-radius:12px;padding:12px">👑 闆娘模式（需輸入授權碼）</button>
+    <div id="role-pin-area" style="display:none;margin-top:14px">
+      <input type="password" id="role-pin-input" placeholder="闆娘授權碼" inputmode="numeric"
+        style="width:100%;padding:11px 14px;border:2px solid #D8EBF5;border-radius:16px;font-size:18px;text-align:center;letter-spacing:6px;outline:none;color:#5C4A3A;font-family:var(--en);margin-bottom:10px;background:#F0F7FC">
+      <div id="role-pin-err" style="font-size:12px;color:var(--cr);height:16px;margin-bottom:10px"></div>
+      <button id="role-pin-submit" class="btn btn-p" style="width:100%;justify-content:center;border-radius:12px;padding:11px">確認</button>
+    </div>
+  </div>
+</div>
+
 <div id="app" style="display:none">
 <div id="ov"></div>
 <aside id="sb">
@@ -856,6 +871,89 @@ function getAuthCode() { return localStorage.getItem(AUTH_CODE_KEY) || '2026'; }
   input.addEventListener('keydown', e => { if (e.key === 'Enter') tryAuth(); });
 })();
 
+// ══ 角色權限（闆娘 / 店員）══
+const ROLE_PIN_KEY = 'wm_role_pin';
+function getRolePin() { return localStorage.getItem(ROLE_PIN_KEY) || '5678'; }
+function currentRole() { return sessionStorage.getItem('wm_role') || null; }
+function isStaffMode() { return currentRole() === 'staff'; }
+// 店員模式下唯一開放的頁面：其餘（報表、闆娘分帳、員工管理、賣貨便月結、資料管理、管理設定）一律視為闆娘專用
+const STAFF_ALLOWED_PAGES = ['pos', 'inventory', 'orders', 'members'];
+
+(function initRoleGate() {
+  const gate = document.getElementById('role-gate');
+  const staffBtn = document.getElementById('role-staff-btn');
+  const ownerBtn = document.getElementById('role-owner-btn');
+  const pinArea = document.getElementById('role-pin-area');
+  const pinInput = document.getElementById('role-pin-input');
+  const pinErr = document.getElementById('role-pin-err');
+  const pinSubmit = document.getElementById('role-pin-submit');
+
+  function showRoleGateIfNeeded() {
+    if (document.getElementById('auth-gate').style.display !== 'none') return; // 裝置還沒解鎖，先不管
+    if (currentRole()) { applyRolePermissions(); }
+    else { gate.style.display = 'flex'; }
+  }
+  // 裝置解鎖後（含已在本次分頁解鎖過的情況）都要檢查一次身份
+  showRoleGateIfNeeded();
+  const authSubmit = document.getElementById('auth-submit');
+  const authInput = document.getElementById('auth-input');
+  const _checkAfterAuth = () => setTimeout(showRoleGateIfNeeded, 0);
+  authSubmit.addEventListener('click', _checkAfterAuth);
+  authInput.addEventListener('keydown', e => { if (e.key === 'Enter') _checkAfterAuth(); });
+
+  function enterAs(role) {
+    sessionStorage.setItem('wm_role', role);
+    gate.style.display = 'none';
+    applyRolePermissions();
+  }
+  staffBtn.addEventListener('click', () => enterAs('staff'));
+  ownerBtn.addEventListener('click', () => { pinArea.style.display = 'block'; pinInput.focus(); });
+  function tryOwnerPin() {
+    if (pinInput.value.trim() === getRolePin()) { enterAs('owner'); }
+    else { pinErr.textContent = '授權碼錯誤'; pinInput.value = ''; pinInput.focus(); }
+  }
+  pinSubmit.addEventListener('click', tryOwnerPin);
+  pinInput.addEventListener('keydown', e => { if (e.key === 'Enter') tryOwnerPin(); });
+})();
+
+// ── 依身份隱藏/鎖住對應功能：店員模式看不到、點不到闆娘專用頁面 ──
+function applyRolePermissions() {
+  const staff = isStaffMode();
+  document.querySelectorAll('.ni[data-page], .bn-item[data-page]').forEach(btn => {
+    const page = btn.dataset.page;
+    if (staff && !STAFF_ALLOWED_PAGES.includes(page)) {
+      btn.style.display = 'none';
+    } else {
+      btn.style.display = '';
+    }
+  });
+  // 頂部工具列身份標示 + 切換身份按鈕
+  let badge = document.getElementById('role-badge');
+  if (!badge) {
+    badge = document.createElement('button');
+    badge.id = 'role-badge';
+    badge.style.cssText = 'font-size:11px;border:none;border-radius:6px;padding:4px 10px;font-family:var(--zh);cursor:pointer;margin-right:8px';
+    const tb = document.getElementById('tb');
+    tb.insertBefore(badge, document.getElementById('tb-act'));
+    badge.addEventListener('click', () => {
+      if (!confirm('要切換操作身份嗎？')) return;
+      sessionStorage.removeItem('wm_role');
+      document.getElementById('role-gate').style.display = 'flex';
+    });
+  }
+  if (staff) { badge.textContent = '🧑‍💼 店員模式'; badge.style.background = 'var(--p2)'; badge.style.color = 'var(--txt2)'; }
+  else       { badge.textContent = '👑 闆娘模式'; badge.style.background = 'var(--cr-lt)'; badge.style.color = 'var(--cr2)'; }
+}
+
+// ── 若店員模式下試圖切換到闆娘專用頁面（例如舊書籤、殘留的按鈕事件），一律擋下並導回收銀台 ──
+function guardPageAccess(page) {
+  if (isStaffMode() && !STAFF_ALLOWED_PAGES.includes(page)) {
+    showToast('⛔ 此功能僅限闆娘使用');
+    return false;
+  }
+  return true;
+}
+
 // ══ ICONS ══
 const IC = {
   search: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
@@ -1110,6 +1208,7 @@ const PAGE_TITLES = {pos:'結帳收銀',inventory:'庫存管理',orders:'訂單�
 const PF = {};
 
 function navigateTo(page) {
+  if (!guardPageAccess(page)) { page = 'pos'; }
   document.querySelectorAll('.ni').forEach(b => b.classList.remove('on'));
   const sBtn = document.querySelector('.ni[data-page="' + page + '"]');
   if (sBtn) sBtn.classList.add('on');
@@ -1910,6 +2009,12 @@ function openRefundModal({ title, desc, maxQty, unitPrice, onConfirm }) {
             '</div>' +
           '</label>' +
           '<div id="rf-warn" style="margin-top:10px;font-size:12px;color:#7a5800;background:#fff8e6;border:1px solid #ffe08a;border-radius:5px;padding:8px 12px">⚠ 退款後將自動還原庫存，此操作無法復原，請確認後再送出。</div>' +
+          (isStaffMode() ?
+            '<div style="margin-top:10px;padding:10px 12px;background:var(--cr-lt);border-radius:var(--r)">' +
+              '<label style="font-size:12px;font-weight:600;color:var(--cr2);display:block;margin-bottom:6px">👑 退款需要闆娘授權碼</label>' +
+              '<input type="password" id="rf-owner-pin" class="fi" placeholder="請闆娘輸入授權碼" inputmode="numeric" style="text-align:center;letter-spacing:4px">' +
+              '<div id="rf-owner-pin-err" style="font-size:11px;color:var(--cr);height:14px;margin-top:4px"></div>' +
+            '</div>' : '') +
         '</div>' +
       '</div>' +
       '<div class="mft">' +
@@ -1959,6 +2064,14 @@ function openRefundModal({ title, desc, maxQty, unitPrice, onConfirm }) {
   });
 
   ge('rf-confirm').addEventListener('click', () => {
+    if (isStaffMode()) {
+      const pinEl = ge('rf-owner-pin');
+      if (!pinEl || pinEl.value.trim() !== getRolePin()) {
+        ge('rf-owner-pin-err').textContent = '授權碼錯誤，請闆娘輸入';
+        if (pinEl) { pinEl.value = ''; pinEl.focus(); }
+        return;
+      }
+    }
     const defective = ge('rf-defective').checked;
     let note = ge('rf-note').value.trim();
     if (defective && !note) note = '商品瑕疵／損壞';
@@ -2154,6 +2267,18 @@ function openProdModal(id) {
   const close = () => ov.remove();
   ov.querySelector('#pm-x').addEventListener('click', close);
   ov.querySelector('#pm-cancel').addEventListener('click', close);
+
+  // 店員模式：售價/成本屬於「商品定價修改」，只有闆娘能改
+  if (isStaffMode()) {
+    ['pf-pr', 'pf-co'].forEach(id => {
+      const el = ov.querySelector('#' + id);
+      if (el) { el.disabled = true; el.style.background = 'var(--p2)'; el.style.cursor = 'not-allowed'; el.title = '僅限闆娘修改'; }
+    });
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:11px;color:var(--txt3);margin-top:-8px;margin-bottom:4px';
+    hint.textContent = '🔒 售價／成本僅限闆娘修改';
+    ov.querySelector('#pf-co')?.closest('.fg')?.after(hint);
+  }
 
   const varWrap = ov.querySelector('#pf-variants-wrap');
   const varList = ov.querySelector('#pf-var-list');
@@ -2363,7 +2488,7 @@ PF.orders = function() {
               '<td>' + bdg(o.status) + '</td>' +
               '<td><div style="display:flex;gap:4px">' +
                 (o.status==='處理中' ? '<button class="btn btn-p btn-sm ord-done" data-oid="'+o.id+'">' + IC.check + '</button>' : '') +
-                (o.status==='完成' ? '<button class="btn btn-o btn-sm ord-ref" data-oid="'+o.id+'">退款</button>' : '') +
+                ((o.status==='完成'||o.status==='部分退款') ? '<button class="btn btn-o btn-sm ord-ref" data-oid="'+o.id+'">退款</button>' : '') +
                 '<button class="btn btn-d btn-sm ord-del" data-oid="'+o.id+'">' + IC.trash + '</button>' +
               '</div></td>' +
             '</tr>'
@@ -3246,6 +3371,31 @@ PF.settings = function() {
       '</div>' +
     '</div>' +
 
+    '<div class="card" style="margin-top:20px;max-width:820px">' +
+      '<div class="card-hd"><span class="card-ttl">👑 闆娘身份授權碼</span></div>' +
+      '<div style="padding:18px 20px">' +
+        '<div style="font-size:13px;color:var(--txt2);margin-bottom:14px">開機後選擇「闆娘模式」、以及店員申請退款時，都需要輸入這組授權碼。跟上面「系統安全」的開機密碼是分開的兩組密碼。</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:13px">' +
+          '<div class="fg" style="margin:0"><label>目前闆娘授權碼驗證</label>' +
+            '<input class="fi" type="password" id="role-pin-old" placeholder="請輸入目前闆娘授權碼" inputmode="numeric" maxlength="20"></div>' +
+          '<div style="display:flex;align-items:flex-end">' +
+            '<button class="btn btn-o" id="role-pin-verify">驗證</button>' +
+          '</div>' +
+        '</div>' +
+        '<div id="role-pin-change-area" style="display:none;margin-top:14px;border-top:1px solid var(--p2);padding-top:14px">' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:13px">' +
+            '<div class="fg" style="margin:0"><label>新闆娘授權碼</label>' +
+              '<input class="fi" type="password" id="role-pin-new" placeholder="請輸入新授權碼" inputmode="numeric" maxlength="20"></div>' +
+            '<div class="fg" style="margin:0"><label>確認新授權碼</label>' +
+              '<input class="fi" type="password" id="role-pin-new2" placeholder="再輸入一次" inputmode="numeric" maxlength="20"></div>' +
+          '</div>' +
+          '<div style="margin-top:12px;display:flex;justify-content:flex-end">' +
+            '<button class="btn btn-p" id="role-pin-save">' + IC.check + ' 儲存新闆娘授權碼</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+
     '</div>';
 
   renderTierCards();
@@ -3261,6 +3411,31 @@ PF.settings = function() {
     shopConfig.note    = ge('sh-note')?.value.trim() || '';
     saveToLocal();
     showToast('店家資訊已儲存');
+    PF.settings();
+  });
+
+  // 闆娘授權碼驗證與修改
+  ge('role-pin-verify')?.addEventListener('click', () => {
+    const val = ge('role-pin-old')?.value.trim();
+    if (!val) { showToast('請輸入目前闆娘授權碼'); return; }
+    if (val === getRolePin()) {
+      ge('role-pin-change-area').style.display = 'block';
+      ge('role-pin-old').style.borderColor = '#1e6b2e';
+      showToast('驗證成功，請輸入新授權碼');
+    } else {
+      ge('role-pin-old').value = '';
+      ge('role-pin-old').style.borderColor = 'var(--cr)';
+      showToast('授權碼錯誤');
+    }
+  });
+  ge('role-pin-save')?.addEventListener('click', () => {
+    const n1 = ge('role-pin-new')?.value.trim();
+    const n2 = ge('role-pin-new2')?.value.trim();
+    if (!n1) { showToast('請輸入新授權碼'); return; }
+    if (n1 !== n2) { showToast('兩次輸入不一致'); return; }
+    if (n1.length < 4) { showToast('授權碼至少 4 位'); return; }
+    localStorage.setItem(ROLE_PIN_KEY, n1);
+    showToast('✅ 闆娘授權碼已更新為 ' + n1.replace(/./g,'*') + '（' + n1.length + ' 位）');
     PF.settings();
   });
 
@@ -3644,7 +3819,8 @@ function renderSellShipReport() {
     return '<div style="text-align:center;padding:32px;color:var(--txt3);font-size:13px">尚未匯入任何賣貨便訂單<br><span style="font-size:11px">匯入後將顯示月結匯總</span></div>';
   }
 
-  const posOrders = orders.filter(o => o.status === '完成');
+  // 只有「整筆全額退款」才不算營收；「部分退款」訂單的 o.total 已經是退款後的剩餘金額，應該照樣計入月結
+  const posOrders = orders.filter(o => o.status === '完成' || o.status === '部分退款');
   const extOrders = externalOrders;
 
   // Group by month
