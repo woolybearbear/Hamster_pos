@@ -375,14 +375,20 @@ tr:hover td{background:rgba(248,244,227,.55)}
 
 /* ── 列印樣式：只印收據內容，移除所有背景 ── */
 @media print {
+  /* 整個系統的 html/body 平常被鎖死成「高度=螢幕高、超出隱藏」（單頁應用內部自己捲動用），
+     列印時如果不解除，收據內容再怎麼調整都會被這層限制卡住印不出來，這是真正的根本原因 */
+  html, body { height: auto !important; overflow: visible !important; }
   /* 隱藏所有 UI */
   body > *:not(.ovm) { display: none !important; }
   .ovm:not(.printing) { display: none !important; }
-  .ovm { position: fixed !important; inset: 0 !important; background: none !important;
-         display: flex !important; align-items: flex-start !important; justify-content: center !important; }
-  /* 隱藏 modal 外框、標題列、按鈕列，只留收據 */
+  .ovm { position: static !important; inset: auto !important; background: none !important;
+         display: block !important; width: 100% !important; height: auto !important; }
+  /* 收據視窗平常有 max-height:88vh + overflow-y:auto（螢幕上用捲動看），
+     列印時若不解除，超出視窗高度的品項/備註/感謝詞會被直接裁掉印不出來，這裡強制攤開全部內容 */
   .modal { box-shadow: none !important; border: none !important;
-           border-radius: 0 !important; background: transparent !important; }
+           border-radius: 0 !important; background: transparent !important;
+           max-height: none !important; overflow: visible !important;
+           width: 100% !important; max-width: 100% !important; margin: 0 !important; }
   .mhd, .mft { display: none !important; }
   .mbd { padding: 0 !important; }
   /* 收據本體：去掉所有邊框背景，純文字 */
@@ -954,7 +960,8 @@ function ownerTag(owner) {
 }
 
 function getMemberOrders(mid) {
-  return orders.filter(o => o.memberId === mid && o.status === '完成')
+  // 只有「整筆訂單全部退款」才不算數；「部分退款」代表顧客仍有實際消費，應繼續計入消費次數/到訪紀錄
+  return orders.filter(o => o.memberId === mid && (o.status === '完成' || o.status === '部分退款'))
                .sort((a,b) => b.date.localeCompare(a.date));
 }
 
@@ -1273,7 +1280,20 @@ function searchMember() {
     cartMember = null;
     infoEl.className = 'mbr-info notfound';
     infoEl.style.display = 'block';
-    infoEl.innerHTML = '<span style="font-size:12px">此號碼尚未註冊為會員</span>';
+    infoEl.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">' +
+        '<span style="font-size:12px">此號碼尚未註冊為會員</span>' +
+        '<button class="btn btn-p" id="mbr-quick-add-btn" style="font-size:12px;padding:6px 12px">' + IC.plus + ' 新增會員</button>' +
+      '</div>';
+    const quickAddBtn = ge('mbr-quick-add-btn');
+    if (quickAddBtn) quickAddBtn.addEventListener('click', () => {
+      openMbrModal(null, phone, (saved) => {
+        // 新會員存好後，直接帶入收銀台目前的訂單，不用再重新查詢一次
+        const ph = ge('mbr-phone'); if (ph) ph.value = saved.phone;
+        searchMember();
+        showToast('✅ 已新增會員「' + saved.name + '」並帶入結帳');
+      });
+    });
   }
   renderCartTotals();
 }
@@ -1648,7 +1668,7 @@ async function doCheckout(orderNote, cashPaid) {
   showReceiptModal(order, cm);
 }
 
-function showReceiptModal(order, member) {
+function showReceiptModal(order, member, onClose) {
   const pts = member ? (order.ptsEarned ?? Math.floor(order.total/100)) : 0;
   const ptDeductAmt = order.ptDeduct || 0;
   const redeemNames = (order.redeemIds||[]).map(rid => {
@@ -1690,13 +1710,18 @@ function showReceiptModal(order, member) {
       '</div>' +
     '</div>';
   document.body.appendChild(ov);
-  const close = () => { ov.remove(); PF.pos(); };
+  const close = () => { ov.remove(); (onClose || PF.pos)(); };
   ov.querySelector('#rct-x').addEventListener('click', close);
   ov.querySelector('#rct-close').addEventListener('click', close);
   ov.querySelector('#rct-print').addEventListener('click', () => {
     ov.classList.add('printing');
-    window.print();
-    setTimeout(() => ov.classList.remove('printing'), 500);
+    // 強制觸發一次重排，讓 Safari 確實套用上面的 class 變化，
+    // 否則 Safari 有時會用「加 class 之前」的畫面產生列印預覽，導致印出空白頁
+    void ov.offsetHeight;
+    setTimeout(() => {
+      window.print();
+      setTimeout(() => ov.classList.remove('printing'), 500);
+    }, 60);
   });
 }
 
@@ -2178,7 +2203,7 @@ PF.orders = function() {
   }
   const detail = selOrder ? (
     '<div class="card" id="ord-detail">' +
-      '<div class="card-hd"><span class="card-ttl">訂單詳情</span><button class="btn-g" id="ord-x">' + IC.x + '</button></div>' +
+      '<div class="card-hd"><span class="card-ttl">訂單詳情</span><div style="display:flex;gap:6px;align-items:center"><button class="btn btn-o btn-sm" id="ord-print">' + IC.print + ' 列印</button><button class="btn-g" id="ord-x">' + IC.x + '</button></div></div>' +
       '<div style="padding:16px 18px">' +
         '<div style="font-family:var(--en);font-size:12px;color:var(--cr);font-weight:700;margin-bottom:4px">' + selOrder.id + '</div>' +
         '<div style="font-size:13px;color:#555;margin-bottom:2px">日期：' + selOrder.date + '</div>' +
@@ -2186,7 +2211,19 @@ PF.orders = function() {
         '<div style="font-size:13px;color:#555;margin-bottom:8px">付款：' + selOrder.payment + '</div>' +
         bdg(selOrder.status) +
         '<hr style="border:none;border-top:1px dashed var(--p3);margin:12px 0">' +
-        selOrder.items.map(it => '<div style="margin-bottom:7px"><div style="display:flex;justify-content:space-between;font-size:13px;align-items:flex-start"><span>' + ownerTag(it.owner) + ' ' + it.name + ' ×' + it.qty + '</span><span class="tn">' + fm(it.price*it.qty) + '</span></div>' + (it.spec?'<div style="font-size:10.5px;color:var(--txt3);margin-top:1px;padding-left:2px">'+it.spec+'</div>':'') + '</div>').join('') +
+        selOrder.items.map(it => {
+          const refQty = it.refundedQty || (it.refunded ? it.qty : 0);
+          const allRefunded = refQty >= it.qty;
+          return '<div style="margin-bottom:7px">' +
+            '<div style="display:flex;justify-content:space-between;font-size:13px;align-items:flex-start' + (allRefunded?';text-decoration:line-through;opacity:.5':'') + '">' +
+              '<span>' + ownerTag(it.owner) + ' ' + it.name + ' ×' + it.qty +
+                (refQty>0 && !allRefunded ? '<span style="color:var(--cr);font-weight:600;margin-left:3px;text-decoration:none">（已退' + refQty + '）</span>' : '') +
+              '</span>' +
+              '<span class="tn">' + fm(it.price*it.qty) + '</span>' +
+            '</div>' +
+            (it.spec?'<div style="font-size:10.5px;color:var(--txt3);margin-top:1px;padding-left:2px">'+it.spec+'</div>':'') +
+          '</div>';
+        }).join('') +
         (selOrder.discPct>0 ? '<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--cr)"><span>折扣 '+selOrder.discPct+'%</span><span>-'+fm(selOrder.discAmt)+'</span></div>' : '') +
         (selOrder.discFix>0 ? '<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--cr)"><span>折扣金額</span><span>-'+fm(selOrder.discFix)+'</span></div>' : '') +
         '<hr style="border:none;border-top:1px dashed var(--p3);margin:12px 0">' +
@@ -2312,6 +2349,10 @@ PF.orders = function() {
   ge('ord-from')?.addEventListener('change', function() { ordDateFrom=this.value; PF.orders(); });
   ge('ord-to')?.addEventListener('change',   function() { ordDateTo=this.value;   PF.orders(); });
   if (selOrder) ge('ord-x')?.addEventListener('click', () => { selOrder=null; PF.orders(); });
+  if (selOrder) ge('ord-print')?.addEventListener('click', () => {
+    const mem = selOrder.memberId ? members.find(m => m.id === selOrder.memberId) : null;
+    showReceiptModal(selOrder, mem, () => PF.orders());
+  });
 
   // 訂單備註編輯
   ge('ord-note-edit')?.addEventListener('click', () => {
@@ -2988,11 +3029,20 @@ function openMbrHistoryModal(mid) {
                   '<span style="font-family:var(--en);font-size:11px;color:var(--txt3)">' + o.id + '</span>' +
                   '<span style="font-size:12px;color:var(--txt3)">' + o.date + '</span>' +
                   '<span class="bdg bb" style="font-size:10px">' + o.payment + '</span>' +
+                  (o.status==='部分退款' ? '<span class="bdg br" style="font-size:10px">部分退款</span>' : '') +
                 '</div>' +
                 '<span style="font-family:var(--en);font-weight:700;font-size:15px;color:var(--cr)">' + fm(o.total) + '</span>' +
               '</div>' +
               '<div style="display:flex;flex-wrap:wrap;gap:5px">' +
-                o.items.map(it=>'<span style="font-size:11.5px;background:var(--p2);border-radius:4px;padding:2px 8px;color:var(--txt2)">'+ownerTag(it.owner)+' '+it.name+' ×'+it.qty+'</span>').join('') +
+                o.items.map(it => {
+                  const refQty = it.refundedQty || (it.refunded ? it.qty : 0);
+                  const allRefunded = refQty >= it.qty;
+                  return '<span style="font-size:11.5px;background:var(--p2);border-radius:4px;padding:2px 8px;color:var(--txt2);' +
+                    (allRefunded ? 'text-decoration:line-through;opacity:.55' : '') + '">' +
+                    ownerTag(it.owner) + ' ' + it.name + ' ×' + it.qty +
+                    (refQty>0 && !allRefunded ? '<span style="color:var(--cr);font-weight:600;margin-left:3px">（已退' + refQty + '）</span>' : '') +
+                  '</span>';
+                }).join('') +
               '</div>' +
             '</div>'
           ).join('')) +
@@ -3015,7 +3065,7 @@ function openMbrHistoryModal(mid) {
   });
 }
 
-function openMbrModal(id) {
+function openMbrModal(id, prefillPhone, onSaved) {
   const m = id ? members.find(x=>x.id===id) : null;
   const ov = document.createElement('div'); ov.className='ovm';
   ov.innerHTML =
@@ -3023,7 +3073,7 @@ function openMbrModal(id) {
       '<div class="mhd"><div class="mttl">' + (m?'編輯會員':'新增會員') + '</div><button class="btn-g" id="mm-x">' + IC.x + '</button></div>' +
       '<div class="mbd"><div class="g2">' +
         '<div class="fg"><label>姓名</label><input class="fi" id="mf-nm" value="' + (m?.name||'') + '"></div>' +
-        '<div class="fg"><label>手機號碼 <span style="font-size:11px;color:var(--txt3);font-weight:400">（09 開頭 10 碼）</span></label><input class="fi" id="mf-ph" value="' + (m?.phone||'') + '" placeholder="例：0912345678" maxlength="12" inputmode="numeric"></div>' +
+        '<div class="fg"><label>手機號碼 <span style="font-size:11px;color:var(--txt3);font-weight:400">（09 開頭 10 碼）</span></label><input class="fi" id="mf-ph" value="' + (m?.phone||prefillPhone||'') + '" placeholder="例：0912345678" maxlength="12" inputmode="numeric"></div>' +
         '<div class="fg"><label>累積點數</label><input class="fi" type="number" id="mf-pt" value="' + (m?.points||0) + '"></div>' +
         '<div class="fg"><label>累計消費（元）</label><input class="fi" type="number" id="mf-sp" value="' + (m?.totalSpend||0) + '"></div>' +
       '</div>' +
@@ -3044,9 +3094,11 @@ function openMbrModal(id) {
     const spend=+ge('mf-sp').value||0;
     const pts=+ge('mf-pt').value||0;
     const data={name,phone,points:pts,totalSpend:spend,note:ge('mf-nt').value.trim(),tier:getTierIdBySpend(spend),joined:m?.joined||today()};
-    if (id) { const i=members.findIndex(x=>x.id===id); members[i]={...members[i],...data}; }
-    else members.push({id:'M'+Date.now(),...data});
-    close(); saveToLocal(); PF.members();
+    let saved;
+    if (id) { const i=members.findIndex(x=>x.id===id); members[i]={...members[i],...data}; saved=members[i]; }
+    else { saved={id:'M'+Date.now(),...data}; members.push(saved); }
+    close(); saveToLocal();
+    if (onSaved) onSaved(saved); else PF.members();
   });
 }
 
