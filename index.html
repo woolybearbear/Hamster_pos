@@ -1668,42 +1668,84 @@ async function doCheckout(orderNote, cashPaid) {
   showReceiptModal(order, cm);
 }
 
-function showReceiptModal(order, member, onClose) {
+// ── 收據內容本體（.rp 裡面的 HTML），抽成獨立函式：畫面上的收據預覽、跟另開視窗列印都共用同一份內容 ──
+function buildReceiptInnerHTML(order, member) {
   const pts = member ? (order.ptsEarned ?? Math.floor(order.total/100)) : 0;
   const ptDeductAmt = order.ptDeduct || 0;
   const redeemNames = (order.redeemIds||[]).map(rid => {
     const ri = shopConfig.redeemItems.find(x=>x.id===rid);
     return ri ? ri.name : '';
   }).filter(Boolean);
+  return (
+    '<div class="rb">' + (shopConfig.name || 'W&M 熊窩專門店') + '</div>' +
+    '<div class="rs">熊 窩 專 門 店</div>' + (shopConfig.taxId ? '<div style="text-align:center;font-size:10px;color:var(--txt3);margin-bottom:4px;font-family:var(--en)">統一編號：' + shopConfig.taxId + '</div>' : '') +
+    '<hr class="rhr">' +
+    (shopConfig.address ? '<div style="text-align:center;font-size:10px;color:var(--txt3);margin-bottom:2px">' + shopConfig.address + '</div>' : '') +
+    (shopConfig.phone ? '<div style="text-align:center;font-size:10px;color:var(--txt3);margin-bottom:4px;font-family:var(--en)">' + shopConfig.phone + '</div>' : '') +
+    '<hr class="rhr">' +
+    '<div class="rr"><span>訂單編號</span><span style="font-family:var(--en);font-size:11px;font-weight:600">' + order.id + '</span></div>' +
+    '<div class="rr"><span>日期</span><span>' + order.date + '</span></div>' +
+    (order.customer !== '散客' ? '<div class="rr"><span>客戶</span><span>' + order.customer + '</span></div>' : '') +
+    '<div class="rr"><span>付款</span><span>' + order.payment + '</span></div>' +
+    '<hr class="rhr">' +
+    order.items.map(it => {
+      const refQty = it.refundedQty || (it.refunded ? it.qty : 0);
+      const allRefunded = refQty >= it.qty;
+      return '<div class="rr"' + (allRefunded ? ' style="text-decoration:line-through;opacity:.5"' : '') + '>' +
+        '<span>' + it.name + ' ×' + it.qty +
+          (refQty>0 && !allRefunded ? '<span style="color:var(--cr);font-weight:600">（已退' + refQty + '）</span>' : '') +
+          (it.spec?'<div style="font-size:10px;color:var(--txt3);line-height:1.4;margin-top:1px">'+it.spec+'</div>':'') +
+        '</span>' +
+        '<span style="font-family:var(--en);font-weight:600">' + fm(it.price*it.qty) + '</span>' +
+      '</div>';
+    }).join('') +
+    '<hr class="rhr">' +
+    (order.discPct>0 ? '<div class="rr"><span>折扣 '+order.discPct+'%</span><span style="font-family:var(--en);color:var(--cr)">-'+fm(order.discAmt)+'</span></div>' : '') +
+    (order.discFix>0 ? '<div class="rr"><span>折扣金額</span><span style="font-family:var(--en);color:var(--cr)">-'+fm(order.discFix)+'</span></div>' : '') +
+    (ptDeductAmt>0 ? '<div class="rr"><span>點數折抵</span><span style="font-family:var(--en);color:var(--gold)">-'+fm(ptDeductAmt)+'</span></div>' : '') +
+    (redeemNames.length>0 ? '<div class="rr"><span>兌換獎勵</span><span style="font-size:11.5px;color:var(--gold)">'+redeemNames.join('、')+'</span></div>' : '') +
+    '<div class="rr rtot"><span>合計</span><span style="font-family:var(--en);color:var(--cr);font-size:16px">' + fm(order.total) + '</span></div>' +
+    (member ? '<div class="rr" style="margin-top:6px"><span>點數異動</span><span style="font-family:var(--en);color:var(--gold);font-weight:700">+'+pts+' pt　餘 '+member.points+' pt</span></div>' : '') +
+    (order.cashPaid > 0 ? '<div class="rr" style="margin-top:6px"><span>客付金額</span><span style="font-family:var(--en);font-weight:600">$' + order.cashPaid.toLocaleString() + '</span></div>' : '') +
+    (order.cashPaid > 0 ? '<div class="rr"><span>找零</span><span style="font-family:var(--en);font-weight:700;color:var(--cr)">$' + order.changeAmt.toLocaleString() + '</span></div>' : '') +
+    (order.note ? '<div style="margin-top:10px;padding:8px 10px;background:var(--p2);border-radius:4px;font-size:11.5px;color:var(--txt2)"><strong>備註：</strong>' + order.note + '</div>' : '') +
+    '<div style="text-align:center;font-size:11px;color:var(--txt3);margin-top:12px">' + (shopConfig.note || '感謝光臨，歡迎再次蒞臨熊窩') + '</div>'
+  );
+}
+
+// ── 另開一個乾淨的獨立視窗來列印收據，完全不依賴主系統畫面的版面/CSS，避免 Safari 對 @media print 動態切換的相容性問題 ──
+function printReceiptStandalone(order, member) {
+  const inner = buildReceiptInnerHTML(order, member);
+  const win = window.open('', '_blank', 'width=420,height=680');
+  if (!win) { alert('瀏覽器擋住了列印視窗的彈出，請到瀏覽器設定允許此網站的快顯視窗，再試一次列印'); return; }
+  win.document.open();
+  win.document.write(
+    '<!DOCTYPE html><html><head><meta charset="utf-8"><title>收據列印 ' + order.id + '</title><style>' +
+      ':root{--txt:#5C4A3A;--txt2:#7A6A5A;--txt3:#B0A090;--cr:#7BB8D4;--gold:#F5C842;--p2:#F5EFE6;--en:\'Nunito\',sans-serif;--zh:\'Noto Sans TC\',sans-serif}' +
+      '@page{size:80mm auto;margin:4mm}' +
+      '*{box-sizing:border-box;margin:0;padding:0}' +
+      "body{font-family:var(--zh);color:var(--txt);font-size:14px;padding:16px;background:#fff}" +
+      '.rp{max-width:100%;margin:0 auto}' +
+      ".rb{text-align:center;font-family:var(--en);font-style:italic;font-weight:700;font-size:17px;color:var(--txt)}" +
+      ".rs{text-align:center;font-family:var(--zh);font-size:10.5px;color:var(--txt3);letter-spacing:3px;margin-bottom:12px}" +
+      '.rhr{border:none;border-top:1px dashed #000;margin:9px 0}' +
+      '.rr{display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px;color:var(--txt)}' +
+      '.rtot{font-weight:700;font-size:13.5px}' +
+    '</style></head><body><div class="rp">' + inner + '</div></body></html>'
+  );
+  win.document.close();
+  const doPrint = () => { try { win.focus(); win.print(); } catch(e) { console.warn('列印視窗錯誤:', e); } };
+  win.onload = doPrint;
+  setTimeout(doPrint, 300); // 保險：某些瀏覽器 document.write 後 onload 不一定會觸發
+}
+
+function showReceiptModal(order, member, onClose) {
+  const receiptInner = buildReceiptInnerHTML(order, member);
   const ov = document.createElement('div'); ov.className='ovm';
   ov.innerHTML =
     '<div class="modal" style="max-width:360px">' +
       '<div class="mhd"><div class="mttl">結帳完成</div><button class="btn-g" id="rct-x">' + IC.x + '</button></div>' +
-      '<div class="mbd"><div class="rp">' +
-        '<div class="rb">' + (shopConfig.name || 'W&M 熊窩專門店') + '</div>' +
-        '<div class="rs">熊 窩 專 門 店</div>' + (shopConfig.taxId ? '<div style="text-align:center;font-size:10px;color:var(--txt3);margin-bottom:4px;font-family:var(--en)">統一編號：' + shopConfig.taxId + '</div>' : '') +
-        '<hr class="rhr">' +
-        (shopConfig.address ? '<div style="text-align:center;font-size:10px;color:var(--txt3);margin-bottom:2px">' + shopConfig.address + '</div>' : '') +
-        (shopConfig.phone ? '<div style="text-align:center;font-size:10px;color:var(--txt3);margin-bottom:4px;font-family:var(--en)">' + shopConfig.phone + '</div>' : '') +
-        '<hr class="rhr">' +
-        '<div class="rr"><span>訂單編號</span><span style="font-family:var(--en);font-size:11px;font-weight:600">' + order.id + '</span></div>' +
-        '<div class="rr"><span>日期</span><span>' + order.date + '</span></div>' +
-        (order.customer !== '散客' ? '<div class="rr"><span>客戶</span><span>' + order.customer + '</span></div>' : '') +
-        '<div class="rr"><span>付款</span><span>' + order.payment + '</span></div>' +
-        '<hr class="rhr">' +
-        order.items.map(it => '<div class="rr"><span>' + it.name + ' ×' + it.qty + (it.spec?'<div style="font-size:10px;color:var(--txt3);line-height:1.4;margin-top:1px">'+it.spec+'</div>':'') + '</span><span style="font-family:var(--en);font-weight:600">' + fm(it.price*it.qty) + '</span></div>').join('') +
-        '<hr class="rhr">' +
-        (order.discPct>0 ? '<div class="rr"><span>折扣 '+order.discPct+'%</span><span style="font-family:var(--en);color:var(--cr)">-'+fm(order.discAmt)+'</span></div>' : '') +
-        (order.discFix>0 ? '<div class="rr"><span>折扣金額</span><span style="font-family:var(--en);color:var(--cr)">-'+fm(order.discFix)+'</span></div>' : '') +
-        (ptDeductAmt>0 ? '<div class="rr"><span>點數折抵</span><span style="font-family:var(--en);color:var(--gold)">-'+fm(ptDeductAmt)+'</span></div>' : '') +
-        (redeemNames.length>0 ? '<div class="rr"><span>兌換獎勵</span><span style="font-size:11.5px;color:var(--gold)">'+redeemNames.join('、')+'</span></div>' : '') +
-        '<div class="rr rtot"><span>合計</span><span style="font-family:var(--en);color:var(--cr);font-size:16px">' + fm(order.total) + '</span></div>' +
-        (member ? '<div class="rr" style="margin-top:6px"><span>點數異動</span><span style="font-family:var(--en);color:var(--gold);font-weight:700">+'+pts+' pt　餘 '+member.points+' pt</span></div>' : '') +
-        (order.cashPaid > 0 ? '<div class="rr" style="margin-top:6px"><span>客付金額</span><span style="font-family:var(--en);font-weight:600">$' + order.cashPaid.toLocaleString() + '</span></div>' : '') +
-        (order.cashPaid > 0 ? '<div class="rr"><span>找零</span><span style="font-family:var(--en);font-weight:700;color:var(--cr)">$' + order.changeAmt.toLocaleString() + '</span></div>' : '') +
-        (order.note ? '<div style="margin-top:10px;padding:8px 10px;background:var(--p2);border-radius:4px;font-size:11.5px;color:var(--txt2)"><strong>備註：</strong>' + order.note + '</div>' : '') +
-        '<div style="text-align:center;font-size:11px;color:var(--txt3);margin-top:12px">' + (shopConfig.note || '感謝光臨，歡迎再次蒞臨熊窩') + '</div>' +
-      '</div></div>' +
+      '<div class="mbd"><div class="rp">' + receiptInner + '</div></div>' +
       '<div class="mft">' +
         '<button class="btn btn-o" id="rct-close">關閉</button>' +
         '<button class="btn btn-p" id="rct-print">' + IC.print + ' 列印</button>' +
@@ -1714,14 +1756,7 @@ function showReceiptModal(order, member, onClose) {
   ov.querySelector('#rct-x').addEventListener('click', close);
   ov.querySelector('#rct-close').addEventListener('click', close);
   ov.querySelector('#rct-print').addEventListener('click', () => {
-    ov.classList.add('printing');
-    // 強制觸發一次重排，讓 Safari 確實套用上面的 class 變化，
-    // 否則 Safari 有時會用「加 class 之前」的畫面產生列印預覽，導致印出空白頁
-    void ov.offsetHeight;
-    setTimeout(() => {
-      window.print();
-      setTimeout(() => ov.classList.remove('printing'), 500);
-    }, 60);
+    printReceiptStandalone(order, member);
   });
 }
 
