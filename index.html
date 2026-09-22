@@ -472,6 +472,9 @@ input[type=checkbox]{accent-color:var(--cr);width:15px;height:15px;cursor:pointe
     <button class="ni" data-page="orders">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>訂單管理
     </button>
+    <button class="ni" data-page="preorder">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4"/><path d="M4 6v12a2 2 0 0 0 2 2h14v-4"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>客人預購
+    </button>
     <div class="nav-sec">Analytics</div>
     <button class="ni" data-page="reports">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>報表統計
@@ -558,7 +561,7 @@ let fbListeners = []; // 儲存 unsubscribe functions
 let pendingFBWrites = 0; // 尚未完成的雲端寫入次數，用來提醒使用者「同步中先別關頁面」
 
 // ── 上次已同步到雲端的資料快照（用來比對出「真正變動過」的項目，避免整批集合重寫爆用量）──
-let lastSyncedSnapshot = { products: [], members: [], orders: [], employees: [], restockLog: [], shopConfig: {}, tierConfig: [] };
+let lastSyncedSnapshot = { products: [], members: [], orders: [], employees: [], restockLog: [], preorders: [], shopConfig: {}, tierConfig: [] };
 let syncDebounceTimer = null;
 
 // ── Firestore 集合參照 ──
@@ -568,6 +571,7 @@ const COL = {
   orders:     () => db && db.collection('orders'),
   employees:  () => db && db.collection('employees'),
   restockLog: () => db && db.collection('restockLog'),
+  preorders:  () => db && db.collection('preorders'),
   config:     () => db && db.collection('config'),
 };
 
@@ -631,12 +635,13 @@ async function loadFromFB() {
   if (!db) return false;
   try {
     showSyncStatus('載入中…');
-    const [prodSnap, memSnap, ordSnap, empSnap, logSnap, cfgSnap] = await Promise.all([
+    const [prodSnap, memSnap, ordSnap, empSnap, logSnap, preSnap, cfgSnap] = await Promise.all([
       COL.products().orderBy('sortOrder').get(),
       COL.members().get(),
       COL.orders().orderBy('date', 'desc').get(),
       COL.employees().get(),
       COL.restockLog().orderBy('ts', 'desc').get(),
+      COL.preorders().get(),
       COL.config().get(),
     ]);
     if (!prodSnap.empty || !memSnap.empty || !ordSnap.empty) {
@@ -645,6 +650,7 @@ async function loadFromFB() {
       orders     = ordSnap.docs.map(d => d.data());
       employees  = empSnap.docs.map(d => d.data());
       restockLog = logSnap.docs.map(d => { const data = d.data(); if (!data.id) data.id = d.id; return data; });
+      preorders  = preSnap.docs.map(d => { const data = d.data(); if (!data.id) data.id = d.id; return data; });
       cfgSnap.docs.forEach(d => {
         if (d.id === 'shopConfig')  Object.assign(shopConfig, d.data());
         if (d.id === 'tierConfig')  tierConfig = d.data().tiers || tierConfig;
@@ -657,7 +663,7 @@ async function loadFromFB() {
       // 這批資料本來就來自雲端，標記為「已同步」基準，避免等一下又原封不動寫回去浪費用量
       lastSyncedSnapshot = {
         products: sanitize(products), members: sanitize(members), orders: sanitize(orders),
-        employees: sanitize(employees), restockLog: sanitize(restockLog),
+        employees: sanitize(employees), restockLog: sanitize(restockLog), preorders: sanitize(preorders),
         shopConfig: sanitize(shopConfig), tierConfig: sanitize(tierConfig),
       };
       saveToLocal(); // 同步到 localStorage 備援
@@ -666,7 +672,7 @@ async function loadFromFB() {
       return true;
     } else {
       // Firestore 是空的 → 全新開始（不自動上傳本機舊資料，避免污染雲端）
-      lastSyncedSnapshot = { products: [], members: [], orders: [], employees: [], restockLog: [], shopConfig: sanitize(shopConfig), tierConfig: sanitize(tierConfig) };
+      lastSyncedSnapshot = { products: [], members: [], orders: [], employees: [], restockLog: [], preorders: [], shopConfig: sanitize(shopConfig), tierConfig: sanitize(tierConfig) };
       showSyncStatus('✅ 全新開始');
       fbReady = true;
       return false;
@@ -687,6 +693,7 @@ async function pushAllToFB() {
     saveCollectionToFB('orders', orders),
     saveCollectionToFB('employees', employees),
     saveCollectionToFB('restockLog', restockLog),
+    saveCollectionToFB('preorders', preorders),
     saveDocToFB('config', 'shopConfig', shopConfig),
     saveDocToFB('config', 'tierConfig', { tiers: tierConfig }),
   ]);
@@ -707,7 +714,7 @@ function diffChanged(colName, arr, idField = 'id') {
 async function syncChangedToFB() {
   if (!db) return;
   try {
-    const colData = { products, members, orders, employees, restockLog };
+    const colData = { products, members, orders, employees, restockLog, preorders };
     const jobs = [];
     Object.keys(colData).forEach(colName => {
       const changed = diffChanged(colName, colData[colName]);
@@ -724,7 +731,7 @@ async function syncChangedToFB() {
     // 寫入成功後，把這次的內容標記為「已同步」基準
     lastSyncedSnapshot = {
       products: sanitize(products), members: sanitize(members), orders: sanitize(orders),
-      employees: sanitize(employees), restockLog: sanitize(restockLog),
+      employees: sanitize(employees), restockLog: sanitize(restockLog), preorders: sanitize(preorders),
       shopConfig: sanitize(shopConfig), tierConfig: sanitize(tierConfig),
     };
   } catch(e) { console.warn('syncChangedToFB error:', e); throw e; }
@@ -786,6 +793,7 @@ function startRealtimeSync() {
   listen('orders',     d => { orders     = d.sort((a,b)=>b.date.localeCompare(a.date)); });
   listen('employees',  d => { employees  = d; });
   listen('restockLog', d => { restockLog = d.sort((a,b)=>b.ts?.localeCompare(a.ts)); });
+  listen('preorders',  d => { preorders  = d.sort((a,b)=>(b.date||'').localeCompare(a.date||'')); });
   db.collection('config').onSnapshot(snap => {
     if (!fbReady) return;
     snap.docs.forEach(doc => {
@@ -877,7 +885,7 @@ function getRolePin() { return localStorage.getItem(ROLE_PIN_KEY) || '5678'; }
 function currentRole() { return sessionStorage.getItem('wm_role') || null; }
 function isStaffMode() { return currentRole() === 'staff'; }
 // 店員模式下唯一開放的頁面：其餘（報表、闆娘分帳、員工管理、賣貨便月結、資料管理、管理設定）一律視為闆娘專用
-const STAFF_ALLOWED_PAGES = ['pos', 'inventory', 'orders', 'members'];
+const STAFF_ALLOWED_PAGES = ['pos', 'inventory', 'orders', 'members', 'preorder'];
 
 (function initRoleGate() {
   const gate = document.getElementById('role-gate');
@@ -996,6 +1004,8 @@ let orders = [];
 let externalOrders = []; // 賣貨便匯入的訂單
 
 let employees = [];
+
+let preorders = []; // 客人預購商品清單：[{id, customer, phone, itemName, spec, qty, price, note, status, date}]
 
 // ══ STATE ══
 let cart = [], payMethod = '現金', discount = 0, discountFix = 0;
@@ -1204,7 +1214,7 @@ updateDeviceBadge();
 window.addEventListener('resize', updateDeviceBadge);
 
 // ══ NAV ══
-const PAGE_TITLES = {pos:'結帳收銀',inventory:'庫存管理',orders:'訂單管理',reports:'報表統計',split:'闆娘分帳',members:'會員管理',settings:'管理設定',employees:'員工管理',sellship:'賣貨便月結',datamanage:'資料管理'};
+const PAGE_TITLES = {pos:'結帳收銀',inventory:'庫存管理',orders:'訂單管理',preorder:'客人預購',reports:'報表統計',split:'闆娘分帳',members:'會員管理',settings:'管理設定',employees:'員工管理',sellship:'賣貨便月結',datamanage:'資料管理'};
 const PF = {};
 
 function navigateTo(page) {
@@ -1232,8 +1242,11 @@ document.querySelectorAll('.bn-item').forEach(btn => {
 // POS PAGE
 // ══════════════════════════════════════
 PF.pos = function() {
-  ge('tb-act').innerHTML = '<div class="sw" style="width:200px" id="pos-sw">' + IC.search + '<input id="pos-srch" placeholder="搜尋商品…"></div>';
+  ge('tb-act').innerHTML =
+    '<div class="sw" style="width:200px" id="pos-sw">' + IC.search + '<input id="pos-srch" placeholder="搜尋商品…"></div>' +
+    '<button class="btn btn-o btn-sm" id="pos-preorder-btn" style="margin-left:8px">📝 登記預購</button>';
   ge('pos-srch').addEventListener('input', function(){ posSearch = this.value; renderPosGrid(); });
+  ge('pos-preorder-btn').addEventListener('click', () => openPreorderModal(null, () => PF.pos()));
 
   const cats = ['全部', ...new Set(products.map(p => p.cat))];
   ge('pg').innerHTML =
@@ -1255,7 +1268,7 @@ PF.pos = function() {
         '<div class="pos-g" id="pos-grid"></div>' +
       '</div>' +
       '<div class="cp">' +
-        '<div class="cp-hd"><span class="cp-lbl">購物車</span><span class="cp-cnt" id="cp-cnt"></span></div>' +
+        '<div class="cp-hd"><span class="cp-lbl">購物車</span><span class="cp-cnt" id="cp-cnt"></span><button class="btn btn-sm" id="cp-preorder-btn" style="margin-left:auto;background:rgba(255,255,255,.18);color:#fff;border-color:rgba(255,255,255,.3)" title="把客人之前登記的預購商品加進來一起結帳">🛒 帶入預購</button></div>' +
         '<div class="mbr-zone">' +
           '<div class="mbr-row">' +
             '<input class="fi" id="mbr-phone" placeholder="輸入手機號碼（09xxxxxxxx）" maxlength="12" inputmode="numeric" style="font-size:12.5px;padding:7px 10px;flex:1">' +
@@ -1315,6 +1328,7 @@ PF.pos = function() {
   ge('mbr-phone').addEventListener('keydown', e => { if (e.key==='Enter') searchMember(); });
   ge('mbr-clr-btn').addEventListener('click', clearMember);
   ge('ck-btn').addEventListener('click', openCheckoutModal);
+  ge('cp-preorder-btn').addEventListener('click', openPreorderPickerModal);
 
   
   renderPosGrid();
@@ -2743,6 +2757,241 @@ function openOrderExportModal() {
   });
 }
 
+// ══════════════════════════════════════
+// PREORDER MODAL（新增／編輯客人預購商品）
+// ══════════════════════════════════════
+function openPreorderModal(id, onSaved) {
+  const p = id ? preorders.find(x => x.id === id) : null;
+  // 每筆預購可以包含多樣商品（像一張小購物車），編輯時先複製一份出來改，按儲存才真正寫回
+  let editItems = p ? JSON.parse(JSON.stringify(p.items || [])) : [{ itemName:'', spec:'', qty:1, price:0, owner:'共同' }];
+  const ownerOpts = [...shopConfig.owners, '共同'];
+
+  const ov = document.createElement('div'); ov.className = 'ovm';
+  ov.innerHTML =
+    '<div class="modal" style="max-width:560px">' +
+      '<div class="mhd"><div class="mttl">' + (p ? '編輯預購' : '📝 新增客人預購') + '</div><button class="btn-g" id="pre-x">' + IC.x + '</button></div>' +
+      '<div class="mbd">' +
+      '<div class="g2">' +
+        '<div class="fg" style="margin:0"><label>客戶姓名</label><input class="fi" id="pre-customer" placeholder="請輸入客戶姓名" value="' + (p?.customer || '') + '"></div>' +
+        '<div class="fg" style="margin:0"><label>聯絡電話 <span style="font-size:11px;font-weight:400;color:var(--txt3)">（選填）</span></label><input class="fi" id="pre-phone" placeholder="例：0912345678" inputmode="numeric" value="' + (p?.phone || '') + '"></div>' +
+      '</div>' +
+      '<div class="fg"><label>預購商品 <span style="font-size:11px;font-weight:400;color:var(--txt3)">（可以新增多樣商品）</span></label>' +
+        '<div id="pre-item-list" style="display:flex;flex-direction:column;gap:8px"></div>' +
+        '<button type="button" class="btn btn-o btn-sm" id="pre-item-add" style="align-self:flex-start;margin-top:8px">＋ 新增一樣商品</button>' +
+      '</div>' +
+      '<div style="text-align:right;font-size:13px;font-weight:600;color:var(--cr);margin:6px 2px 0" id="pre-items-total"></div>' +
+      '<div class="fg"><label>備註 <span style="font-size:11px;font-weight:400;color:var(--txt3)">（選填）</span></label><textarea class="fi" id="pre-note" rows="2" style="resize:vertical;line-height:1.6">' + (p?.note || '') + '</textarea></div>' +
+      '</div>' +
+      '<div class="mft"><button class="btn btn-o" id="pre-cancel">取消</button><button class="btn btn-p" id="pre-save">' + IC.check + ' 儲存</button></div>' +
+    '</div>';
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.querySelector('#pre-x').addEventListener('click', close);
+  ov.querySelector('#pre-cancel').addEventListener('click', close);
+
+  const itemList = ov.querySelector('#pre-item-list');
+  const totalEl  = ov.querySelector('#pre-items-total');
+
+  function renderItemRows() {
+    itemList.innerHTML = editItems.map((it, i) =>
+      '<div style="display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap;padding:8px;background:var(--p2);border-radius:var(--r)" data-ii="' + i + '">' +
+        '<input class="fi pit-name" data-ii="' + i + '" placeholder="商品名稱，例：田島倉鼠飼料 1kg" value="' + (it.itemName||'') + '" style="flex:2 1 160px">' +
+        '<input class="fi pit-spec" data-ii="' + i + '" placeholder="款式（選填）" value="' + (it.spec||'') + '" style="flex:1 1 90px">' +
+        '<input class="fi pit-qty" data-ii="' + i + '" type="number" min="1" placeholder="數量" value="' + (it.qty??1) + '" style="flex:0 1 70px">' +
+        '<input class="fi pit-price" data-ii="' + i + '" type="number" min="0" placeholder="單價" value="' + (it.price||'') + '" style="flex:0 1 80px">' +
+        '<select class="fs pit-owner" data-ii="' + i + '" style="flex:0 1 90px">' +
+          ownerOpts.map(o => '<option' + (it.owner===o?' selected':'') + '>' + o + '</option>').join('') +
+        '</select>' +
+        (editItems.length > 1 ? '<button type="button" class="btn-g pit-del" data-ii="' + i + '" style="flex:none;color:#b71c1c">' + IC.x + '</button>' : '') +
+      '</div>'
+    ).join('');
+    const total = editItems.reduce((s,it) => s + (it.qty||0) * (it.price||0), 0);
+    totalEl.textContent = total > 0 ? '預估總額：' + fm(total) : '';
+  }
+  itemList.addEventListener('input', e => {
+    const ii = e.target.dataset.ii; if (ii === undefined) return;
+    const it = editItems[ii];
+    if (e.target.classList.contains('pit-name'))  it.itemName = e.target.value;
+    if (e.target.classList.contains('pit-spec'))  it.spec = e.target.value;
+    if (e.target.classList.contains('pit-qty'))   { it.qty = parseInt(e.target.value)||1; renderItemRows(); }
+    if (e.target.classList.contains('pit-price')) { it.price = parseFloat(e.target.value)||0; renderItemRows(); }
+  });
+  itemList.addEventListener('change', e => {
+    if (e.target.classList.contains('pit-owner')) editItems[e.target.dataset.ii].owner = e.target.value;
+  });
+  itemList.addEventListener('click', e => {
+    const btn = e.target.closest('.pit-del'); if (!btn) return;
+    editItems.splice(parseInt(btn.dataset.ii), 1);
+    renderItemRows();
+  });
+  ov.querySelector('#pre-item-add').addEventListener('click', () => {
+    editItems.push({ itemName:'', spec:'', qty:1, price:0, owner:'共同' });
+    renderItemRows();
+  });
+  renderItemRows();
+
+  ov.querySelector('#pre-save').addEventListener('click', () => {
+    const customer = ge('pre-customer').value.trim();
+    if (!customer) { alert('請填寫客戶姓名'); return; }
+    // 整理商品明細，過濾掉沒填名稱的空白列
+    const items = editItems
+      .map(it => ({ itemName: it.itemName.trim(), spec: it.spec.trim(), qty: it.qty||1, price: it.price||0, owner: it.owner||'共同' }))
+      .filter(it => it.itemName);
+    if (!items.length) { alert('請至少填寫一樣預購商品'); return; }
+    const data = { customer, phone: ge('pre-phone').value.trim(), items, note: ge('pre-note').value.trim() };
+    if (id) {
+      const i = preorders.findIndex(x => x.id === id);
+      preorders[i] = { ...preorders[i], ...data };
+    } else {
+      preorders.unshift({ id: genId(), ...data, status: '待叫貨', date: today() });
+    }
+    close(); saveToLocal();
+    showToast(id ? '✅ 已更新預購資料' : '✅ 已登記客人預購');
+    if (onSaved) onSaved(); else PF.preorder();
+  });
+}
+
+// ── 把某筆預購的所有商品加進目前的收銀購物車（跟客人其他購買的商品一起結帳，當月金額才會正確算進去）──
+function addPreorderToCart(preorderId) {
+  const pre = preorders.find(x => x.id === preorderId);
+  if (!pre) return false;
+  pre.items.forEach(it => {
+    cart.push({
+      id: 'PRE' + genId(), name: it.itemName + (it.spec ? '（' + it.spec + '）' : ''),
+      price: it.price, cost: 0, qty: it.qty, owner: it.owner || '共同',
+      cat: '客人預購', spec: it.spec || '', isPreorder: true, stock: 999999,
+    });
+  });
+  pre.status = '已完成';
+  saveToLocal();
+  return true;
+}
+
+
+
+// ── 收銀台裡的「帶入預購」挑選視窗：列出還沒結掉的預購，點一下就把商品加進目前購物車 ──
+function openPreorderPickerModal() {
+  const pending = preorders.filter(x => x.status !== '已完成');
+  const ov = document.createElement('div'); ov.className = 'ovm';
+  ov.innerHTML =
+    '<div class="modal" style="max-width:480px">' +
+      '<div class="mhd"><div class="mttl">🛒 帶入客人預購商品</div><button class="btn-g" id="pp-x">' + IC.x + '</button></div>' +
+      '<div class="mbd" style="max-height:60vh;overflow-y:auto">' +
+        (pending.length === 0
+          ? '<div style="text-align:center;padding:30px;color:var(--txt3);font-size:13px">目前沒有待處理的預購紀錄</div>'
+          : pending.map(x => {
+              const total = (x.items||[]).reduce((s,it)=>s+(it.qty||0)*(it.price||0),0);
+              return '<div style="border:1.5px solid var(--p3);border-radius:var(--r);padding:12px;margin-bottom:10px">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+                  '<strong>' + x.customer + '</strong>' +
+                  '<button class="btn btn-p btn-sm pp-pick" data-id="' + x.id + '">加入購物車</button>' +
+                '</div>' +
+                (x.items||[]).map(it => '<div style="font-size:12px;color:var(--txt2)">' + it.itemName + (it.spec?'（'+it.spec+'）':'') + ' ×' + it.qty + (it.price?'　'+fm(it.price):'') + '</div>').join('') +
+                (total ? '<div style="font-size:12px;color:var(--cr);font-weight:600;margin-top:4px">小計 ' + fm(total) + '</div>' : '') +
+              '</div>';
+            }).join('')
+        ) +
+      '</div>' +
+      '<div class="mft"><button class="btn btn-o" id="pp-close">關閉</button></div>' +
+    '</div>';
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.querySelector('#pp-x').addEventListener('click', close);
+  ov.querySelector('#pp-close').addEventListener('click', close);
+  ov.querySelectorAll('.pp-pick').forEach(b => b.addEventListener('click', () => {
+    addPreorderToCart(b.dataset.id);
+    renderCartItems();
+    close();
+    showToast('✅ 已把預購商品加入購物車');
+  }));
+}
+
+
+let preorderTab = 'pending'; // 'pending' | 'done' | 'all'
+PF.preorder = function() {
+  const addBtn = document.createElement('button');
+  addBtn.className = 'btn btn-p'; addBtn.innerHTML = IC.plus + ' 新增預購';
+  addBtn.addEventListener('click', () => openPreorderModal(null));
+  ge('tb-act').innerHTML = ''; ge('tb-act').appendChild(addBtn);
+
+  const pendingCount = preorders.filter(x => x.status !== '已完成').length;
+  const doneCount = preorders.filter(x => x.status === '已完成').length;
+
+  ge('pg').innerHTML =
+    '<div class="card">' +
+      '<div class="card-hd" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">' +
+        '<div class="tabs" style="margin:0;border-bottom:none">' +
+          '<button class="tab' + (preorderTab==='pending'?' on':'') + '" id="pre-tab-pending">待叫貨（' + pendingCount + '）</button>' +
+          '<button class="tab' + (preorderTab==='done'?' on':'') + '" id="pre-tab-done">已完成（' + doneCount + '）</button>' +
+          '<button class="tab' + (preorderTab==='all'?' on':'') + '" id="pre-tab-all">全部</button>' +
+        '</div>' +
+        (pendingCount > 0 && preorderTab !== 'done' ? '<span style="font-size:12px;color:var(--txt3)">叫貨前記得來這裡看看客人還在等什麼 👀</span>' : '') +
+      '</div>' +
+      '<div class="tw"><table>' +
+        '<thead><tr><th>登記日期</th><th>客戶</th><th>預購商品明細</th><th>小計</th><th>備註</th><th>狀態</th><th>操作</th></tr></thead>' +
+        '<tbody id="pre-tbody"></tbody>' +
+      '</table></div>' +
+    '</div>';
+
+  ge('pre-tab-pending').addEventListener('click', () => { preorderTab='pending'; PF.preorder(); });
+  ge('pre-tab-done').addEventListener('click',    () => { preorderTab='done';    PF.preorder(); });
+  ge('pre-tab-all').addEventListener('click',     () => { preorderTab='all';     PF.preorder(); });
+
+  renderPreorderTable();
+};
+
+function renderPreorderTable() {
+  const tb = ge('pre-tbody'); if (!tb) return;
+  const list = preorders.filter(x =>
+    preorderTab === 'all' ? true : preorderTab === 'done' ? x.status === '已完成' : x.status !== '已完成'
+  );
+  tb.innerHTML = list.length === 0
+    ? '<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--txt3)">目前沒有預購紀錄</td></tr>'
+    : list.map(x => {
+        const total = (x.items||[]).reduce((s,it) => s + (it.qty||0)*(it.price||0), 0);
+        return '<tr>' +
+          '<td style="white-space:nowrap;color:var(--txt3);font-size:12px">' + x.date + '</td>' +
+          '<td style="font-weight:600;white-space:nowrap">' + x.customer + (x.phone ? '<div style="font-size:11px;color:var(--txt3);font-weight:400">' + x.phone + '</div>' : '') + '</td>' +
+          '<td>' + (x.items||[]).map(it =>
+            '<div style="font-size:12.5px;margin-bottom:2px">' + it.itemName + (it.spec?'（'+it.spec+'）':'') + ' ×' + it.qty +
+            (it.price ? '　<span style="color:var(--txt3)">' + fm(it.price) + '</span>' : '') +
+            '　<span class="bdg bi" style="font-size:10px">' + (it.owner||'共同') + '</span>' +
+            '</div>'
+          ).join('') + '</td>' +
+          '<td class="tn" style="font-weight:600">' + (total ? fm(total) : '—') + '</td>' +
+          '<td style="color:var(--txt3);font-size:12px;max-width:140px;white-space:normal">' + (x.note || '') + '</td>' +
+          '<td>' + (x.status === '已完成' ? '<span class="bdg bg">✅ 已完成</span>' : '<span class="bdg ba">⏳ 待叫貨</span>') + '</td>' +
+          '<td><div style="display:flex;gap:5px;flex-wrap:wrap">' +
+            (x.status !== '已完成' ? '<button class="btn btn-p btn-sm pre-tocart" data-id="' + x.id + '">🛒 加入購物車結帳</button>' : '') +
+            '<button class="btn btn-o btn-sm pre-toggle" data-id="' + x.id + '">' + (x.status==='已完成' ? '↩ 恢復待處理' : '✅ 標記完成') + '</button>' +
+            '<button class="btn btn-o btn-sm pre-edit" data-id="' + x.id + '">編輯</button>' +
+            '<button class="btn btn-d btn-sm pre-del" data-id="' + x.id + '">' + IC.trash + '</button>' +
+          '</div></td>' +
+        '</tr>';
+      }).join('');
+
+  tb.querySelectorAll('.pre-tocart').forEach(b => b.addEventListener('click', () => {
+    if (!confirm('確定把這筆預購的商品加入收銀購物車嗎？加入後請記得完成結帳。')) return;
+    addPreorderToCart(b.dataset.id);
+    showToast('✅ 已加入購物車，請到結帳收銀完成結帳');
+    navigateTo('pos');
+  }));
+  tb.querySelectorAll('.pre-toggle').forEach(b => b.addEventListener('click', () => {
+    const x = preorders.find(p => p.id === b.dataset.id); if (!x) return;
+    x.status = x.status === '已完成' ? '待叫貨' : '已完成';
+    saveToLocal(); PF.preorder();
+  }));
+  tb.querySelectorAll('.pre-edit').forEach(b => b.addEventListener('click', () => openPreorderModal(b.dataset.id)));
+  tb.querySelectorAll('.pre-del').forEach(b => b.addEventListener('click', async () => {
+    if (!confirm('確定刪除這筆預購紀錄？')) return;
+    const delId = b.dataset.id;
+    preorders = preorders.filter(p => p.id !== delId);
+    saveToLocal();
+    if (fbReady) { try { await deleteDocFromFB('preorders', delId); } catch(e) { console.warn(e); } }
+    PF.preorder();
+  }));
+}
+
 PF.reports = function() {
   const exportOrderBtn = document.createElement('button');
   exportOrderBtn.className='btn btn-o rpt-exp-btn'; exportOrderBtn.innerHTML=IC.dl+'<span class="btn-txt"> 匯出訂單 Excel</span>';exportOrderBtn.title='匯出訂單 Excel';
@@ -4044,7 +4293,7 @@ PF.datamanage = function() {
       if (db) {
         try {
           showToast('正在清除雲端資料…');
-          const cols = ['products','members','orders','employees','restockLog','config'];
+          const cols = ['products','members','orders','employees','restockLog','preorders','config'];
           for (const col of cols) {
             const snap = await db.collection(col).get();
             if (!snap.empty) {
@@ -4075,7 +4324,7 @@ PF.datamanage = function() {
     if (!confirm('確定要清除 Firebase 雲端所有資料嗎？')) return;
     if (statusEl) statusEl.textContent = '⏳ 正在連線 Firebase…';
     try {
-      const cols = ['products','members','orders','employees','restockLog','config'];
+      const cols = ['products','members','orders','employees','restockLog','preorders','config'];
       let total = 0;
       for (const col of cols) {
         if (statusEl) statusEl.textContent = '⏳ 清除 ' + col + '…';
@@ -4099,7 +4348,7 @@ PF.datamanage = function() {
       }
       if (statusEl) statusEl.textContent = '✅ 雲端已清除 ' + total + ' 筆資料！刷新頁面生效';
       // Reset local state too
-      products = []; members = []; orders = []; employees = []; restockLog = [];
+      products = []; members = []; orders = []; employees = []; restockLog = []; preorders = [];
       saveToLocal();
       showToast('✅ Firebase 雲端已清除！');
     } catch(e) {
@@ -4221,7 +4470,7 @@ function saveToLocal() {
   try {
     const data = {
       products, members, orders, externalOrders, employees,
-      tierConfig, shopConfig, restockLog,
+      tierConfig, shopConfig, restockLog, preorders,
       savedAt: new Date().toISOString(),
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -4240,6 +4489,7 @@ function loadFromLocal() {
     if (data.orders)     orders     = data.orders;
     if (data.employees)  employees  = data.employees;
     if (data.tierConfig) tierConfig = data.tierConfig;
+    if (data.preorders)  preorders  = data.preorders;
     if (data.shopConfig) {
       Object.assign(shopConfig, data.shopConfig);
       if (!shopConfig.pointsRate) shopConfig.pointsRate = 100;
@@ -4256,12 +4506,13 @@ function loadFromLocal() {
   }
 }
 
+
 function exportBackup() {
   const data = {
     _version: '1.1',
     _app: 'WoolyBear POS',
     _exportedAt: new Date().toISOString(),
-    products, members, orders, externalOrders, employees, tierConfig, shopConfig, restockLog,
+    products, members, orders, externalOrders, employees, tierConfig, shopConfig, restockLog, preorders,
   };
   const json = JSON.stringify(data, null, 2);
   const BOM  = '﻿';
@@ -4316,13 +4567,15 @@ function importBackup(file) {
           if (!shopConfig.redeemItems) shopConfig.redeemItems = [];
           if (data.restockLog) restockLog = data.restockLog;
           else restockLog = [];
+          if (data.preorders) preorders = data.preorders;
+          else preorders = [];
           saveToLocal();
           if (fbReady) {
             pushAllToFB().then(() => {
               // 還原是整批覆蓋，寫完後把這份內容標記為已同步基準，避免之後又被誤判成「變動過」重寫一次
               lastSyncedSnapshot = {
                 products: sanitize(products), members: sanitize(members), orders: sanitize(orders),
-                employees: sanitize(employees), restockLog: sanitize(restockLog),
+                employees: sanitize(employees), restockLog: sanitize(restockLog), preorders: sanitize(preorders),
                 shopConfig: sanitize(shopConfig), tierConfig: sanitize(tierConfig),
               };
               showToast('✅ 還原成功並同步至雲端（備份日期：' + exportedAt + '）');
