@@ -659,6 +659,7 @@ async function loadFromFB() {
       if (!shopConfig.pointsRate)  shopConfig.pointsRate  = 100;
       if (!shopConfig.redeemItems) shopConfig.redeemItems = [];
       if (!shopConfig.owners || shopConfig.owners.length < 2) shopConfig.owners = ['Wooly', 'MuMu'];
+      if (!shopConfig.catPrefixes) shopConfig.catPrefixes = {};
       products.forEach((p, i) => { if (p.sortOrder === undefined) p.sortOrder = i; });
       // 這批資料本來就來自雲端，標記為「已同步」基準，避免等一下又原封不動寫回去浪費用量
       lastSyncedSnapshot = {
@@ -993,6 +994,7 @@ let shopConfig = {
   pointsRate: 100,   // 幾點 = $1
   redeemItems: [],   // [{id, name, points}]
   owners: ['Wooly', 'MuMu'],
+  catPrefixes: {},  // 分類條碼字首，例如 {'飼料':'F', '磨牙用品':'C'}，掃碼槍條碼自動產生時用
 };
 
 // ══ DATA ══
@@ -1251,6 +1253,23 @@ PF.pos = function() {
     '<div class="sw" style="width:200px" id="pos-sw">' + IC.search + '<input id="pos-srch" placeholder="搜尋商品…"></div>' +
     '<button class="btn btn-o btn-sm" id="pos-preorder-btn" style="margin-left:8px">📝 登記預購</button>';
   ge('pos-srch').addEventListener('input', function(){ posSearch = this.value; renderPosGrid(); });
+  ge('pos-srch').addEventListener('keydown', function(e){
+    if (e.key !== 'Enter') return;
+    // 掃碼槍的運作方式就是「快速打字＋自動按 Enter」，所以掃完會自動觸發這裡：
+    // 用目前輸入的內容去比對商品的條碼（完全相符才算，避免打到一半就誤加入）
+    const code = this.value.trim();
+    if (!code) return;
+    const matches = products.filter(p => p.barcode && p.barcode === code);
+    if (matches.length === 1) {
+      addToCart(matches[0].id);
+      showToast('✅ 已掃入：' + matches[0].name);
+      this.value = ''; posSearch = ''; renderPosGrid();
+    } else if (matches.length > 1) {
+      showToast('⚠ 有多個商品用同一個條碼，請檢查商品設定');
+    } else {
+      showToast('⚠ 查無此條碼商品：' + code);
+    }
+  });
   ge('pos-preorder-btn').addEventListener('click', () => openPreorderModal(null, () => PF.pos()));
 
   const cats = ['全部', ...new Set(products.map(p => p.cat))];
@@ -1455,7 +1474,7 @@ function renderPosGrid() {
       const mc = posCat==='全部' || p.cat===posCat;
       const mo = posOwner==='全部' || p.owner===posOwner;
       const q  = posSearch.toLowerCase();
-      return mc && mo && (!q || p.name.toLowerCase().includes(q) || p.barcode.toLowerCase().includes(q));
+      return mc && mo && (!q || p.name.toLowerCase().includes(q) || (p.barcode||'').toLowerCase().includes(q));
     })
     .sort((a,b) => (a.sortOrder??999) - (b.sortOrder??999));
   g.innerHTML = list.map(p =>
@@ -2269,7 +2288,7 @@ function openProdModal(id) {
           '<div class="fg" style="margin:0"><label>單位</label><input class="fi" id="pf-un" placeholder="個" value="' + (p?.unit||'') + '"></div>' +
         '</div>' +
         '<div class="fg" style="margin:0"><label>低庫存警示值</label><input class="fi" type="number" id="pf-lo" value="' + (p?.lowStock||5) + '"></div>' +
-        '<div class="fg" style="margin:0"><label>條碼 / SKU</label><input class="fi" id="pf-bc" placeholder="選填" value="' + (p?.barcode||'') + '"></div>' +
+        '<div class="fg" style="margin:0"><label>條碼 / SKU</label><div style="display:flex;gap:8px"><input class="fi" id="pf-bc" placeholder="選填，掃碼槍會用這組數字比對商品" value="' + (p?.barcode||'') + '" style="flex:1"><button type="button" class="btn btn-o btn-sm" id="pf-bc-gen" style="flex:none;white-space:nowrap">🔖 自動產生</button></div></div>' +
         '<div class="fg" style="margin:0"><label>規格說明 <span style="font-size:11px;font-weight:400;color:var(--txt3)">（選填，例：顏色、尺寸、材質…）</span></label><textarea class="fi" id="pf-sp" rows="3" placeholder="例：黑色 / 30cm×20cm / 棉質" style="resize:vertical;line-height:1.6;min-height:72px">' + (p?.spec||'') + '</textarea></div>' +
         '<div class="fg" style="margin:0;padding-top:6px;border-top:1px solid var(--bd)">' +
           '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600"><input type="checkbox" id="pf-var-toggle" style="width:16px;height:16px"' + (editVariants.length?' checked':'') + '> 這個商品有多種規格可選（例如顏色、尺寸），結帳前要讓客人先選規格</label>' +
@@ -2286,6 +2305,19 @@ function openProdModal(id) {
   const close = () => ov.remove();
   ov.querySelector('#pm-x').addEventListener('click', close);
   ov.querySelector('#pm-cancel').addEventListener('click', close);
+
+  ov.querySelector('#pf-bc-gen').addEventListener('click', () => {
+    const cat = ge('pf-cat').value;
+    let prefix = (shopConfig.catPrefixes[cat] || '').trim().toUpperCase();
+    if (!prefix) {
+      prefix = 'P';
+      showToast('⚠ 「' + cat + '」還沒設定字首，先用預設 P，建議到管理設定裡補上');
+    }
+    const existing = new Set(products.map(x => x.barcode).filter(Boolean));
+    let n = 1, code;
+    do { code = prefix + String(n).padStart(4, '0'); n++; } while (existing.has(code));
+    ge('pf-bc').value = code;
+  });
 
   // 店員模式：售價/成本屬於「商品定價修改」，只有闆娘能改
   if (isStaffMode()) {
@@ -2356,6 +2388,10 @@ function openProdModal(id) {
     const data = {name:ge('pf-nm').value.trim(),cat,owner:ge('pf-own').value,price:+ge('pf-pr').value,cost:+ge('pf-co').value,stock:stockVal,unit:ge('pf-un').value.trim(),lowStock:+ge('pf-lo').value||5,barcode:ge('pf-bc').value.trim(),spec:ge('pf-sp').value.trim(),variants:finalVariants};
     if (!data.name||!data.price) { alert('請填寫商品名稱與售價'); return; }
     if (useVariants && !finalVariants.length) { alert('已勾選「有多種規格」，請至少新增一個規格選項，或取消勾選'); return; }
+    if (data.barcode) {
+      const dup = products.find(x => x.barcode === data.barcode && x.id !== id);
+      if (dup) { alert('這組條碼已經被商品「' + dup.name + '」使用了，請換一組，不然掃碼槍會加錯商品'); return; }
+    }
     if (id) { const i=products.findIndex(p=>p.id===id); products[i]={...products[i],...data}; }
     else { const maxOrder = products.reduce((m,p) => Math.max(m, p.sortOrder??0), -1); products.push({id:'P'+Date.now(),...data, sortOrder: maxOrder+1}); }
     close(); saveToLocal(); PF.inventory();
@@ -3611,6 +3647,15 @@ PF.settings = function() {
     '</div>' +
 
     '<div class="card" style="margin-top:20px;max-width:820px">' +
+      '<div class="card-hd"><span class="card-ttl">🔖 商品分類條碼字首</span></div>' +
+      '<div style="padding:18px 20px">' +
+        '<div style="font-size:13px;color:var(--txt2);margin-bottom:14px">幫每個商品分類設定一個英文字首，之後在商品編輯畫面按「自動產生條碼」，就會用這個字首＋流水號組成條碼，方便掃碼槍使用、也方便一眼看出這個條碼是哪一類商品。</div>' +
+        '<div id="cat-prefix-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px"></div>' +
+        '<button class="btn btn-p" id="cat-prefix-save">' + IC.check + ' 儲存字首設定</button>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="card" style="margin-top:20px;max-width:820px">' +
       '<div class="card-hd"><span class="card-ttl">🔒 系統安全</span></div>' +
       '<div style="padding:18px 20px">' +
         '<div style="font-size:13px;color:var(--txt2);margin-bottom:14px">修改授權碼後，下次開啟頁面需輸入新授權碼才能進入系統。</div>' +
@@ -3663,6 +3708,7 @@ PF.settings = function() {
     '</div>';
 
   renderTierCards();
+  renderCatPrefixList();
 
   // Shop info save
   ge('sh-save')?.addEventListener('click', () => {
@@ -3675,6 +3721,19 @@ PF.settings = function() {
     shopConfig.note    = ge('sh-note')?.value.trim() || '';
     saveToLocal();
     showToast('店家資訊已儲存');
+    PF.settings();
+  });
+
+  ge('cat-prefix-save')?.addEventListener('click', () => {
+    const newMap = {};
+    ge('cat-prefix-list')?.querySelectorAll('.cp-row').forEach(row => {
+      const cat = row.dataset.cat;
+      const val = row.querySelector('.cp-input').value.trim().toUpperCase();
+      if (val) newMap[cat] = val;
+    });
+    shopConfig.catPrefixes = newMap;
+    saveToLocal();
+    showToast('✅ 分類字首已儲存');
     PF.settings();
   });
 
@@ -3775,6 +3834,20 @@ PF.settings = function() {
     renderTierCards();
   });
 };
+
+// ── 分類條碼字首設定：把系統裡目前所有商品分類都列出來，各自可以設一個英文字首 ──
+function renderCatPrefixList() {
+  const el = ge('cat-prefix-list'); if (!el) return;
+  const cats = [...new Set(products.map(p => p.cat).filter(Boolean))];
+  el.innerHTML = cats.length === 0
+    ? '<div style="font-size:13px;color:var(--txt3)">目前還沒有商品分類，先到「庫存管理」新增商品並設定分類後，再回來這裡設定字首。</div>'
+    : cats.map(cat =>
+        '<div class="cp-row" data-cat="' + cat + '" style="display:flex;align-items:center;gap:10px">' +
+          '<span style="flex:1;font-size:13px">' + cat + '</span>' +
+          '<input class="fi cp-input" maxlength="3" style="width:70px;text-align:center;text-transform:uppercase" placeholder="例：F" value="' + (shopConfig.catPrefixes[cat] || '') + '">' +
+        '</div>'
+      ).join('');
+}
 
 function renderTierCards() {
   const wrap = ge('tier-cards'); if (!wrap) return;
@@ -4510,6 +4583,7 @@ function loadFromLocal() {
       if (!shopConfig.pointsRate) shopConfig.pointsRate = 100;
       if (!shopConfig.redeemItems) shopConfig.redeemItems = [];
       if (!shopConfig.owners || shopConfig.owners.length < 2) shopConfig.owners = ['Wooly', 'MuMu'];
+      if (!shopConfig.catPrefixes) shopConfig.catPrefixes = {};
     }
     if (data.restockLog) restockLog = data.restockLog;
     restockLog.forEach(r => { if (!r.id) r.id = genId(); });
