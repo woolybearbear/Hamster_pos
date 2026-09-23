@@ -2797,6 +2797,10 @@ function openPreorderModal(id, onSaved) {
   const itemList = ov.querySelector('#pre-item-list');
   const totalEl  = ov.querySelector('#pre-items-total');
 
+  function updateItemsTotal() {
+    const total = editItems.reduce((s,it) => s + (it.qty||0) * (it.price||0), 0);
+    totalEl.textContent = total > 0 ? '預估總額：' + fm(total) : '';
+  }
   function renderItemRows() {
     itemList.innerHTML = editItems.map((it, i) =>
       '<div style="display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap;padding:8px;background:var(--p2);border-radius:var(--r)" data-ii="' + i + '">' +
@@ -2810,16 +2814,16 @@ function openPreorderModal(id, onSaved) {
         (editItems.length > 1 ? '<button type="button" class="btn-g pit-del" data-ii="' + i + '" style="flex:none;color:#b71c1c">' + IC.x + '</button>' : '') +
       '</div>'
     ).join('');
-    const total = editItems.reduce((s,it) => s + (it.qty||0) * (it.price||0), 0);
-    totalEl.textContent = total > 0 ? '預估總額：' + fm(total) : '';
+    updateItemsTotal();
   }
   itemList.addEventListener('input', e => {
     const ii = e.target.dataset.ii; if (ii === undefined) return;
     const it = editItems[ii];
+    // 數量/單價只更新總額文字，不整個重畫列表，不然每打一個字輸入框就會被重建、游標跟著跳掉
     if (e.target.classList.contains('pit-name'))  it.itemName = e.target.value;
     if (e.target.classList.contains('pit-spec'))  it.spec = e.target.value;
-    if (e.target.classList.contains('pit-qty'))   { it.qty = parseInt(e.target.value)||1; renderItemRows(); }
-    if (e.target.classList.contains('pit-price')) { it.price = parseFloat(e.target.value)||0; renderItemRows(); }
+    if (e.target.classList.contains('pit-qty'))   { it.qty = parseInt(e.target.value)||1; updateItemsTotal(); }
+    if (e.target.classList.contains('pit-price')) { it.price = parseFloat(e.target.value)||0; updateItemsTotal(); }
   });
   itemList.addEventListener('change', e => {
     if (e.target.classList.contains('pit-owner')) editItems[e.target.dataset.ii].owner = e.target.value;
