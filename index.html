@@ -1467,6 +1467,40 @@ function loadMemberToCart(mid) {
   }, 50);
 }
 
+// ── 規格價格：規格有自己的售價就用規格的，沒填就沿用商品售價 ──
+function variantPrice(p, v) { return (v && v.price > 0) ? v.price : p.price; }
+// 商品顯示用價格：規格價格不同時顯示區間（例：$100～$150）
+function priceLabel(p) {
+  if (!p.variants || !p.variants.length) return fm(p.price);
+  const ps = p.variants.map(v => variantPrice(p, v));
+  const lo = Math.min(...ps), hi = Math.max(...ps);
+  return lo === hi ? fm(lo) : fm(lo) + '～' + fm(hi);
+}
+
+// ── 規格成本：規格有自己的成本就用規格的，沒填就沿用商品成本 ──
+function variantCost(p, v) { return (v && v.cost > 0) ? v.cost : p.cost; }
+// 某一筆訂單品項的「單位成本」：有規格就抓該規格的成本（找不到商品就當 0，跟原本行為一致）
+function itemUnitCost(it) {
+  const p = (it.pid && products.find(x => x.id === it.pid)) || products.find(x => x.name === it.name);
+  if (!p) return 0;
+  const v = it.variantId ? (p.variants||[]).find(x => x.id === it.variantId) : null;
+  return variantCost(p, v) || 0;
+}
+// 商品成本顯示：規格成本不同時顯示區間
+function costLabel(p) {
+  if (!p.variants || !p.variants.length) return fm(p.cost);
+  const cs = p.variants.map(v => variantCost(p, v));
+  const lo = Math.min(...cs), hi = Math.max(...cs);
+  return lo === hi ? fm(lo) : fm(lo) + '～' + fm(hi);
+}
+// 商品毛利率顯示：有規格就每個規格各算一次（用規格自己的售價與成本），顯示區間
+function marginLabel(p) {
+  const rows = (p.variants && p.variants.length) ? p.variants.map(v => [variantPrice(p, v), variantCost(p, v)]) : [[p.price, p.cost]];
+  const gs = rows.map(([pr, co]) => pr ? Math.round(((pr - co) / pr) * 100) : 0);
+  const lo = Math.min(...gs), hi = Math.max(...gs);
+  return { lo, hi, text: lo === hi ? lo + '%' : lo + '%～' + hi + '%' };
+}
+
 function renderPosGrid() {
   const g = ge('pos-grid'); if (!g) return;
   const list = products
@@ -1485,7 +1519,7 @@ function renderPosGrid() {
       (p.variants && p.variants.length
         ? '<div style="font-size:10px;color:var(--gold,#a67c3d);margin:-2px 0 3px;font-weight:600">🎨 ' + p.variants.length + ' 種規格可選</div>'
         : (p.spec ? '<div style="font-size:10px;color:var(--txt3);margin:-2px 0 3px;line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">' + p.spec + '</div>' : '')) +
-      '<div class="pc-pr">' + fm(p.price) + '</div>' +
+      '<div class="pc-pr">' + priceLabel(p) + '</div>' +
       '<div class="pc-st">' + (p.stock===0 ? '已售完' : '庫存 '+p.stock+' '+p.unit) + '</div>' +
     '</div>'
   ).join('');
@@ -1523,7 +1557,7 @@ function openVariantPickModal(p) {
       '<div class="mbd" style="display:flex;flex-direction:column;gap:8px">' +
         p.variants.map(v =>
           '<button type="button" class="btn btn-o vp-opt" data-vid="' + v.id + '"' + (v.stock<=0?' disabled':'') + ' style="display:flex;justify-content:space-between;align-items:center;padding:13px 15px;width:100%' + (v.stock<=0?';opacity:.4' : '') + '">' +
-            '<span style="font-weight:600">' + v.name + '</span>' +
+            '<span style="font-weight:600">' + v.name + '<span style="font-family:var(--en);font-weight:700;color:var(--cr);margin-left:8px">' + fm(variantPrice(p, v)) + '</span></span>' +
             '<span style="font-size:12px;color:' + (v.stock<=0?'#b71c1c':'var(--txt3)') + '">' + (v.stock>0 ? '庫存 '+v.stock+' '+(p.unit||'') : '已售完') + '</span>' +
           '</button>'
         ).join('') +
@@ -1551,7 +1585,7 @@ function addVariantToCart(pid, variantId) {
     if (ex.qty >= v.stock) { showToast('已達「' + v.name + '」庫存上限'); return; }
     ex.qty++;
   } else {
-    cart.push({...p, qty:1, variantId: v.id, spec: v.name, variantStock: v.stock});
+    cart.push({...p, price: variantPrice(p, v), qty:1, variantId: v.id, spec: v.name, variantStock: v.stock});
   }
   renderCartItems();
 }
@@ -1962,8 +1996,8 @@ function renderInvTable() {
       '<td style="font-weight:600;min-width:120px;white-space:normal">' + p.name + (p.variants&&p.variants.length?'<div style="font-size:10.5px;color:var(--gold,#a67c3d);font-weight:600;margin-top:2px">🎨 '+p.variants.length+' 種規格</div>':(p.spec?'<div style="font-size:11px;color:var(--txt3);font-weight:400;margin-top:2px">'+p.spec+'</div>':'')) + '</td>' +
       '<td>' + ownerTag(p.owner) + '</td>' +
       '<td><span class="bdg bi">' + p.cat + '</span></td>' +
-      '<td class="tn">' + fm(p.price) + '</td>' +
-      '<td class="tn hide-mob" style="color:var(--txt3)">' + fm(p.cost) + '</td>' +
+      '<td class="tn">' + priceLabel(p) + '</td>' +
+      '<td class="tn hide-mob" style="color:var(--txt3)">' + costLabel(p) + '</td>' +
       '<td><strong class="tn">' + p.stock + '</strong> <span style="color:var(--txt3);font-size:11px">' + p.unit + '</span></td>' +
       '<td class="hide-mob">' + (p.stock===0?'<span class="bdg br">缺貨</span>':p.stock<=p.lowStock?'<span class="bdg ba">偏低</span>':'<span class="bdg bg">正常</span>') + '</td>' +
       '<td><div style="display:flex;gap:5px">' +
@@ -2296,7 +2330,7 @@ function openProdModal(id) {
         '<div id="pf-variants-wrap" style="display:none;flex-direction:column;gap:8px;padding:12px;background:var(--p2);border-radius:var(--r)">' +
           '<div id="pf-var-list" style="display:flex;flex-direction:column;gap:6px"></div>' +
           '<button type="button" class="btn btn-o btn-sm" id="pf-var-add" style="align-self:flex-start">＋ 新增規格</button>' +
-          '<div style="font-size:11px;color:var(--txt3)">每個規格可以各自設定庫存，上面的「庫存數量」會自動變成所有規格的加總，不用手動填。</div>' +
+          '<div style="font-size:11px;color:var(--txt3)">每個規格可以各自設定庫存，上面的「庫存數量」會自動變成所有規格的加總，不用手動填。規格的售價、成本欄位空白代表沿用上面的商品售價與成本，有填就以規格自己的為準（毛利報表也會照規格成本計算）。</div>' +
         '</div>' +
       '</div>' +
       '<div class="mft"><button class="btn btn-o" id="pm-cancel">取消</button><button class="btn btn-p" id="pm-save">' + IC.check + ' 儲存</button></div>' +
@@ -2341,6 +2375,8 @@ function openProdModal(id) {
     varList.innerHTML = editVariants.map((v,i) =>
       '<div style="display:flex;gap:6px;align-items:center" data-vi="'+i+'">' +
         '<input class="fi var-nm" data-vi="'+i+'" placeholder="規格名稱，例：紅色 / M 號" value="'+(v.name||'')+'" style="flex:2">' +
+        '<input class="fi var-pr" data-vi="'+i+'" type="number" min="0" placeholder="售價（空白＝同商品）" value="'+(v.price>0?v.price:'')+'"'+(isStaffMode()?' disabled title="僅限闆娘修改"':'')+' style="flex:1.2;min-width:0">' +
+        '<input class="fi var-co" data-vi="'+i+'" type="number" min="0" placeholder="成本（空白＝同商品）" value="'+(v.cost>0?v.cost:'')+'"'+(isStaffMode()?' disabled title="僅限闆娘修改"':'')+' style="flex:1.2;min-width:0">' +
         '<input class="fi var-st" data-vi="'+i+'" type="number" placeholder="庫存" value="'+(v.stock??0)+'" style="flex:1;min-width:0">' +
         '<button type="button" class="btn-g var-del" data-vi="'+i+'" style="flex:none;color:#b71c1c">' + IC.x + '</button>' +
       '</div>'
@@ -2364,13 +2400,15 @@ function openProdModal(id) {
   }
   toggle.addEventListener('change', refreshVarUI);
   ov.querySelector('#pf-var-add').addEventListener('click', () => {
-    editVariants.push({ id: 'V'+Date.now()+Math.random().toString(36).slice(2,6), name:'', stock:0 });
+    editVariants.push({ id: 'V'+Date.now()+Math.random().toString(36).slice(2,6), name:'', stock:0, price:null, cost:null });
     renderVarRows(); syncStockTotal();
   });
   varList.addEventListener('input', e => {
     const vi = e.target.dataset.vi; if (vi === undefined) return;
     if (e.target.classList.contains('var-nm')) editVariants[vi].name = e.target.value;
     if (e.target.classList.contains('var-st')) { editVariants[vi].stock = parseInt(e.target.value)||0; syncStockTotal(); }
+    if (e.target.classList.contains('var-pr')) editVariants[vi].price = parseFloat(e.target.value)||null;
+    if (e.target.classList.contains('var-co')) editVariants[vi].cost = parseFloat(e.target.value)||null;
   });
   varList.addEventListener('click', e => {
     const btn = e.target.closest('.var-del'); if (!btn) return;
@@ -2383,10 +2421,13 @@ function openProdModal(id) {
     let cat = ge('pf-cat').value;
     if (cat === '_new') { cat = prompt('輸入新分類名稱：') || '其他'; }
     const useVariants = toggle.checked;
-    const finalVariants = useVariants ? editVariants.filter(v => v.name && v.name.trim()).map(v => ({id:v.id, name:v.name.trim(), stock:Math.max(0,parseInt(v.stock)||0)})) : [];
+    const finalVariants = useVariants ? editVariants.filter(v => v.name && v.name.trim()).map(v => ({id:v.id, name:v.name.trim(), stock:Math.max(0,parseInt(v.stock)||0), price: v.price>0 ? v.price : null, cost: v.cost>0 ? v.cost : null})) : [];
     const stockVal = useVariants ? finalVariants.reduce((s,v)=>s+v.stock,0) : (+ge('pf-st').value || 0);
     const data = {name:ge('pf-nm').value.trim(),cat,owner:ge('pf-own').value,price:+ge('pf-pr').value,cost:+ge('pf-co').value,stock:stockVal,unit:ge('pf-un').value.trim(),lowStock:+ge('pf-lo').value||5,barcode:ge('pf-bc').value.trim(),spec:ge('pf-sp').value.trim(),variants:finalVariants};
-    if (!data.name||!data.price) { alert('請填寫商品名稱與售價'); return; }
+    if (useVariants && !data.price && finalVariants.length && finalVariants.every(v => v.price > 0)) {
+      data.price = Math.min(...finalVariants.map(v => v.price)); // 每個規格都有自己的價格時，商品售價自動取最低價當基準
+    }
+    if (!data.name||!data.price) { alert('請填寫商品名稱與售價（如果每個規格都有各自售價，可以只填規格售價）'); return; }
     if (useVariants && !finalVariants.length) { alert('已勾選「有多種規格」，請至少新增一個規格選項，或取消勾選'); return; }
     if (data.barcode) {
       const dup = products.find(x => x.barcode === data.barcode && x.id !== id);
@@ -3068,13 +3109,13 @@ PF.reports = function() {
   // 本月統計
   const totalRevM  = doneM.reduce((s,o)=>s+o.total,0);
   const avgOrdM    = doneM.length ? Math.round(totalRevM/doneM.length) : 0;
-  const totalCostM = doneM.reduce((s,o)=>s+o.items.reduce((ss,it)=>{const p=products.find(x=>x.name===it.name);return ss+(p?p.cost*netQty(it):0);},0),0);
+  const totalCostM = doneM.reduce((s,o)=>s+o.items.reduce((ss,it)=>{return ss+itemUnitCost(it)*netQty(it);},0),0);
   const marginM    = totalRevM ? Math.round(((totalRevM-totalCostM)/totalRevM)*100) : 0;
 
   // 累計統計
   const totalRev  = done.reduce((s,o)=>s+o.total,0);
   const avgOrd    = done.length ? Math.round(totalRev/done.length) : 0;
-  const totalCost = done.reduce((s,o)=>s+o.items.reduce((ss,it)=>{const p=products.find(x=>x.name===it.name);return ss+(p?p.cost*netQty(it):0);},0),0);
+  const totalCost = done.reduce((s,o)=>s+o.items.reduce((ss,it)=>{return ss+itemUnitCost(it)*netQty(it);},0),0);
   const margin    = totalRev ? Math.round(((totalRev-totalCost)/totalRev)*100) : 0;
 
   const lowCount = products.filter(p=>p.stock<=p.lowStock).length;
@@ -3140,7 +3181,7 @@ PF.reports = function() {
     '</div>' +
     '<div class="card"><div class="card-hd"><span class="card-ttl">商品進銷存摘要</span></div><div class="tw"><table>' +
       '<thead><tr><th>商品名稱</th><th>闆娘</th><th>分類</th><th>售價</th><th>成本</th><th>毛利率</th><th>庫存</th><th>狀態</th></tr></thead><tbody>' +
-      products.map(p=>{const gr=Math.round(((p.price-p.cost)/p.price)*100);return '<tr><td style="font-weight:500">'+p.name+'</td><td>'+ownerTag(p.owner)+'</td><td><span class="bdg bi">'+p.cat+'</span></td><td class="tn">'+fm(p.price)+'</td><td class="tn" style="color:var(--txt3)">'+fm(p.cost)+'</td><td class="tn" style="color:'+(gr>=50?'#1e6b2e':gr>=30?'#7a5800':'#b71c1c')+';font-weight:700">'+gr+'%</td><td class="tn">'+p.stock+' '+p.unit+'</td><td>'+(p.stock===0?'<span class="bdg br">缺貨</span>':p.stock<=p.lowStock?'<span class="bdg ba">偏低</span>':'<span class="bdg bg">正常</span>')+'</td></tr>';}).join('') +
+      products.map(p=>{const mg=marginLabel(p),gr=mg.lo;return '<tr><td style="font-weight:500">'+p.name+'</td><td>'+ownerTag(p.owner)+'</td><td><span class="bdg bi">'+p.cat+'</span></td><td class="tn">'+priceLabel(p)+'</td><td class="tn" style="color:var(--txt3)">'+costLabel(p)+'</td><td class="tn" style="color:'+(gr>=50?'#1e6b2e':gr>=30?'#7a5800':'#b71c1c')+';font-weight:700">'+mg.text+'</td><td class="tn">'+p.stock+' '+p.unit+'</td><td>'+(p.stock===0?'<span class="bdg br">缺貨</span>':p.stock<=p.lowStock?'<span class="bdg ba">偏低</span>':'<span class="bdg bg">正常</span>')+'</td></tr>';}).join('') +
       '</tbody></table></div></div>';
 };
 
@@ -3199,8 +3240,7 @@ PF.split = function() {
     let rev=0, gross=0, cost=0;
     done.forEach(o => o.items.forEach(it => {
       const net = itNet(o, it);
-      const p   = products.find(x=>x.name===it.name);
-      const c   = p ? p.cost*netQty(it) : 0;
+      const c   = itemUnitCost(it)*netQty(it);
       if (it.owner === owner) {
         rev += net; gross += it.price*it.qty; cost += c;
       } else if (it.owner === '共同') {
