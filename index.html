@@ -1015,6 +1015,7 @@ let posCat = '全部', posOwner = '全部', posSearch = '';
 let ordTab = 'all', selOrder = null, ordDateFrom = '', ordDateTo = '';
 let invSearch = '', invTab = 'all', invOwner = '全部';
 let splitMode = 'own'; // 'own'=各自計算 / 'equal'=均攤
+let splitPeriod = null; // 分帳顯示期間：'YYYY-MM'＝單月、'all'＝全部累計、null＝尚未選擇（預設本月）
 let usePoints = false, redeemIds = [];
 let restockLog = [];
 let cartMember = null;
@@ -3190,7 +3191,14 @@ PF.reports = function() {
 // ══════════════════════════════════════
 PF.split = function() {
   // 已結案訂單：完成 / 部分退款 / 退款（退款訂單的品項會在 itNet() 中被扣為 0，不影響加總，但仍納入避免遺漏）
-  const done = orders.filter(o=>o.status==='完成'||o.status==='部分退款'||o.status==='退款');
+  const allDone = orders.filter(o=>o.status==='完成'||o.status==='部分退款'||o.status==='退款');
+  // ── 期間：預設顯示「本月」，可切換其他月份或全部累計；每個月的帳分開算，不再全部混在一起 ──
+  const curMonth = today().slice(0,7);
+  if (splitPeriod === null) splitPeriod = curMonth;
+  const monthSet = new Set(allDone.map(o => (o.date||'').slice(0,7)).filter(Boolean)); monthSet.add(curMonth);
+  const monthsDesc = [...monthSet].sort().reverse();
+  const done = splitPeriod === 'all' ? allDone : allDone.filter(o => (o.date||'').startsWith(splitPeriod));
+  const periodLabel = splitPeriod === 'all' ? '全部累計' : splitPeriod;
 
   // ── 折扣分攤：每筆訂單折扣按品項比例分配，再扣除該品項已退款金額 ──
   function itBreakdown(o, it) {
@@ -3228,17 +3236,30 @@ PF.split = function() {
           splitMode==='equal' ? equalShare : '—', splitMode==='equal' ? equalShare : '—']);
       });
     });
-    exportCSV('WM熊窩_分帳報表_'+today()+'.csv', rows,
+    exportCSV('WM熊窩_分帳報表_'+periodLabel+'_匯出於'+today()+'.csv', rows,
       ['訂單編號','日期','歸屬闆娘','商品名稱','分類','數量','單價','原始小計','分攤折扣','已退數量','已退金額','實收金額',o1+'均攤',o2+'均攤']);
   });
   ge('tb-act').innerHTML='';
+  const periodWrap = document.createElement('div');
+  periodWrap.style.cssText = 'display:flex;align-items:center;gap:6px;margin-right:8px';
+  periodWrap.innerHTML =
+    '<button class="btn btn-o btn-sm" id="sp-prev" title="前一個月">‹</button>' +
+    '<select class="fs" id="sp-period" style="min-width:140px">' +
+      '<option value="all"' + (splitPeriod==='all'?' selected':'') + '>全部累計</option>' +
+      monthsDesc.map(m => '<option value="' + m + '"' + (m===splitPeriod?' selected':'') + '>' + m + (m===curMonth?'（本月）':'') + '</option>').join('') +
+    '</select>' +
+    '<button class="btn btn-o btn-sm" id="sp-next" title="後一個月">›</button>';
+  ge('tb-act').appendChild(periodWrap);
   ge('tb-act').appendChild(modeBtn);
   ge('tb-act').appendChild(exportBtn);
+  ge('sp-period').addEventListener('change', function(){ splitPeriod = this.value; PF.split(); });
+  ge('sp-prev').addEventListener('click', () => { const i = monthsDesc.indexOf(splitPeriod); if (i>=0 && i<monthsDesc.length-1) { splitPeriod = monthsDesc[i+1]; PF.split(); } });
+  ge('sp-next').addEventListener('click', () => { const i = monthsDesc.indexOf(splitPeriod); if (i>0) { splitPeriod = monthsDesc[i-1]; PF.split(); } });
 
   // ── 各闆娘統計 ──
-  const calc = owner => {
+  const calcOn = (list, owner) => {
     let rev=0, gross=0, cost=0;
-    done.forEach(o => o.items.forEach(it => {
+    list.forEach(o => o.items.forEach(it => {
       const net = itNet(o, it);
       const c   = itemUnitCost(it)*netQty(it);
       if (it.owner === owner) {
@@ -3250,6 +3271,7 @@ PF.split = function() {
     return { rev: Math.round(rev), gross: Math.round(gross), cost: Math.round(cost),
              profit: Math.round(rev-cost), margin: rev ? Math.round(((rev-cost)/rev)*100) : 0 };
   };
+  const calc = owner => calcOn(done, owner);
   const W=calc(o1), M=calc(o2);
   const total = W.rev + M.rev;
   const wPct = total ? Math.round(W.rev/total*100) : 50;
@@ -3277,7 +3299,45 @@ PF.split = function() {
   const sharedRev = prodRows.filter(r=>r.owner==='共同').reduce((s,r)=>s+r.rev,0);
   const sharedRevHalf = Math.round(sharedRev/2);
 
+  // ── 歷史月結紀錄：每個月一列，可查看該月明細、標記「已結清」（會記下結清當下的金額，之後若有退款異動會提醒）──
+  shopConfig.splitSettled = shopConfig.splitSettled || {};
+  const histRows = monthsDesc.map(m => {
+    const list = allDone.filter(o => (o.date||'').startsWith(m));
+    const w = calcOn(list, o1), mm = calcOn(list, o2);
+    const tot = w.rev + mm.rev;
+    const d = Math.round(tot/2) - w.rev; // >0：o1 要補給 o2；<0：o2 要補給 o1
+    return { m, n: list.length, w, mm, tot, d, settled: shopConfig.splitSettled[m] };
+  });
+  const historyHTML =
+    '<div class="card" style="margin-top:16px"><div class="card-hd"><span class="card-ttl">📚 歷史月結紀錄</span>' +
+      '<span style="font-size:11px;color:var(--txt3);font-weight:400">結清後若該月訂單又有退款，會提醒金額異動</span></div>' +
+    '<div class="tw"><table><thead><tr><th>月份</th><th>訂單數</th><th>' + o1 + ' 實收</th><th>' + o2 + ' 實收</th><th>合計實收</th><th>商品成本</th><th>毛利</th><th>均攤補貼</th><th>結算狀態</th><th>操作</th></tr></thead><tbody>' +
+    histRows.map(r => {
+      const st = r.n === 0 ? '<span style="color:var(--txt3)">—</span>'
+        : r.settled
+          ? (r.settled.total === r.tot
+              ? '<span class="bdg bg">✅ 已結清 ' + r.settled.at + '</span>'
+              : '<span class="bdg br" title="結清時 ' + fm(r.settled.total) + '，目前 ' + fm(r.tot) + '">⚠ 結清後有異動（差 ' + fm(Math.abs(r.tot - r.settled.total)) + '）</span>')
+          : '<span class="bdg ba">尚未結清</span>';
+      return '<tr' + (r.m===splitPeriod ? ' style="background:var(--p2)"' : '') + '>' +
+        '<td style="font-weight:600;white-space:nowrap">' + r.m + (r.m===curMonth ? ' <span class="bdg bb" style="font-size:10px">本月</span>' : '') + '</td>' +
+        '<td class="tn">' + r.n + '</td>' +
+        '<td class="tn">' + fm(r.w.rev) + '</td><td class="tn">' + fm(r.mm.rev) + '</td>' +
+        '<td class="tn" style="font-weight:600">' + fm(r.tot) + '</td>' +
+        '<td class="tn">' + fm(r.w.cost + r.mm.cost) + '</td>' +
+        '<td class="tn">' + fm(r.w.profit + r.mm.profit) + '</td>' +
+        '<td style="font-size:12px;white-space:nowrap">' + (r.d===0 ? '—' : (r.d>0 ? o1 + ' → ' + o2 + ' ' + fm(r.d) : o2 + ' → ' + o1 + ' ' + fm(-r.d))) + '</td>' +
+        '<td>' + st + '</td>' +
+        '<td><div style="display:flex;gap:5px">' +
+          '<button class="btn btn-o btn-sm sp-view" data-m="' + r.m + '">查看</button>' +
+          (r.n>0 ? '<button class="btn btn-o btn-sm sp-settle" data-m="' + r.m + '">' + (r.settled ? '取消結清' : '標記已結清') + '</button>' : '') +
+        '</div></td></tr>';
+    }).join('') +
+    '</tbody></table></div></div>';
+
   ge('pg').innerHTML =
+    '<div style="font-size:13px;color:var(--txt2);margin-bottom:10px">📅 目前顯示：<strong>' + periodLabel + '</strong>' +
+      (splitPeriod!=='all' ? '（共 ' + done.length + ' 筆訂單）' : '（所有月份加總）') + '</div>' +
     // ── 模式提示 ──
     (splitMode==='equal'
       ? '<div style="background:var(--p2);border:1.5px solid var(--p3);border-radius:var(--r);padding:10px 16px;margin-bottom:14px;display:flex;align-items:center;gap:10px;font-size:13px">⚖ <strong>均攤模式</strong>：總實收對半平分，成本各自負擔，計算每人應得金額與補貼方向。</div>'
@@ -3363,7 +3423,20 @@ PF.split = function() {
               '</div></td>') +
         '</tr>'
       ).join('') +
-      '</tbody></table></div></div>';
+      '</tbody></table></div></div>' + historyHTML;
+
+  ge('pg').querySelectorAll('.sp-view').forEach(b => b.addEventListener('click', () => { splitPeriod = b.dataset.m; PF.split(); }));
+  ge('pg').querySelectorAll('.sp-settle').forEach(b => b.addEventListener('click', () => {
+    const m = b.dataset.m, r = histRows.find(x => x.m === m); if (!r) return;
+    if (shopConfig.splitSettled[m]) {
+      if (!confirm('要取消 ' + m + ' 的「已結清」標記嗎？')) return;
+      delete shopConfig.splitSettled[m];
+    } else {
+      if (!confirm('確定把 ' + m + ' 標記為已結清嗎？\n當月合計實收 ' + fm(r.tot) + '，系統會記下這個金額；之後如果這個月的訂單又有退款，會提醒你金額有異動。')) return;
+      shopConfig.splitSettled[m] = { at: today(), total: r.tot, diff: r.d };
+    }
+    saveToLocal(); PF.split();
+  }));
 };
 
 // ══════════════════════════════════════
