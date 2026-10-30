@@ -308,7 +308,7 @@ tr:hover td{background:rgba(248,244,227,.55)}
 .cp-hd{background:#7BB8D4;color:#fff;padding:12px 15px;display:flex;align-items:center;
     justify-content:space-between;flex-shrink:0}
 .cp-lbl{font-family:var(--zh);font-weight:700;font-size:13.5px;letter-spacing:.5px}
-.cp-cnt{font-family:var(--en);font-size:11px;opacity:.5}
+.cp-cnt{font-family:var(--zh);font-size:12px;font-weight:600;opacity:.95;margin-left:8px;white-space:nowrap}
 .mbr-zone{padding:10px 11px;border-bottom:1px solid var(--p2);flex-shrink:0;
     background:var(--p);max-height:38%;overflow-y:auto}
 .mbr-row{display:flex;gap:6px;align-items:center}
@@ -475,6 +475,9 @@ input[type=checkbox]{accent-color:var(--cr);width:15px;height:15px;cursor:pointe
     <button class="ni" data-page="preorder">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4"/><path d="M4 6v12a2 2 0 0 0 2 2h14v-4"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>客人預購
     </button>
+    <button class="ni" data-page="closing">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>日結關班
+    </button>
     <div class="nav-sec">Analytics</div>
     <button class="ni" data-page="reports">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>報表統計
@@ -561,7 +564,7 @@ let fbListeners = []; // 儲存 unsubscribe functions
 let pendingFBWrites = 0; // 尚未完成的雲端寫入次數，用來提醒使用者「同步中先別關頁面」
 
 // ── 上次已同步到雲端的資料快照（用來比對出「真正變動過」的項目，避免整批集合重寫爆用量）──
-let lastSyncedSnapshot = { products: [], members: [], orders: [], employees: [], restockLog: [], preorders: [], shopConfig: {}, tierConfig: [] };
+let lastSyncedSnapshot = { products: [], members: [], orders: [], employees: [], restockLog: [], preorders: [], closings: [], shopConfig: {}, tierConfig: [] };
 let syncDebounceTimer = null;
 
 // ── Firestore 集合參照 ──
@@ -572,6 +575,7 @@ const COL = {
   employees:  () => db && db.collection('employees'),
   restockLog: () => db && db.collection('restockLog'),
   preorders:  () => db && db.collection('preorders'),
+  closings:   () => db && db.collection('closings'),
   config:     () => db && db.collection('config'),
 };
 
@@ -635,13 +639,14 @@ async function loadFromFB() {
   if (!db) return false;
   try {
     showSyncStatus('載入中…');
-    const [prodSnap, memSnap, ordSnap, empSnap, logSnap, preSnap, cfgSnap] = await Promise.all([
+    const [prodSnap, memSnap, ordSnap, empSnap, logSnap, preSnap, clsSnap, cfgSnap] = await Promise.all([
       COL.products().orderBy('sortOrder').get(),
       COL.members().get(),
       COL.orders().orderBy('date', 'desc').get(),
       COL.employees().get(),
       COL.restockLog().orderBy('ts', 'desc').get(),
       COL.preorders().get(),
+      COL.closings().get(),
       COL.config().get(),
     ]);
     if (!prodSnap.empty || !memSnap.empty || !ordSnap.empty) {
@@ -651,6 +656,7 @@ async function loadFromFB() {
       employees  = empSnap.docs.map(d => d.data());
       restockLog = logSnap.docs.map(d => { const data = d.data(); if (!data.id) data.id = d.id; return data; });
       preorders  = preSnap.docs.map(d => { const data = d.data(); if (!data.id) data.id = d.id; return data; });
+      closings   = clsSnap.docs.map(d => { const data = d.data(); if (!data.id) data.id = d.id; return data; });
       cfgSnap.docs.forEach(d => {
         if (d.id === 'shopConfig')  Object.assign(shopConfig, d.data());
         if (d.id === 'tierConfig')  tierConfig = d.data().tiers || tierConfig;
@@ -664,7 +670,7 @@ async function loadFromFB() {
       // 這批資料本來就來自雲端，標記為「已同步」基準，避免等一下又原封不動寫回去浪費用量
       lastSyncedSnapshot = {
         products: sanitize(products), members: sanitize(members), orders: sanitize(orders),
-        employees: sanitize(employees), restockLog: sanitize(restockLog), preorders: sanitize(preorders),
+        employees: sanitize(employees), restockLog: sanitize(restockLog), preorders: sanitize(preorders), closings: sanitize(closings),
         shopConfig: sanitize(shopConfig), tierConfig: sanitize(tierConfig),
       };
       saveToLocal(); // 同步到 localStorage 備援
@@ -673,7 +679,7 @@ async function loadFromFB() {
       return true;
     } else {
       // Firestore 是空的 → 全新開始（不自動上傳本機舊資料，避免污染雲端）
-      lastSyncedSnapshot = { products: [], members: [], orders: [], employees: [], restockLog: [], preorders: [], shopConfig: sanitize(shopConfig), tierConfig: sanitize(tierConfig) };
+      lastSyncedSnapshot = { products: [], members: [], orders: [], employees: [], restockLog: [], preorders: [], closings: [], shopConfig: sanitize(shopConfig), tierConfig: sanitize(tierConfig) };
       showSyncStatus('✅ 全新開始');
       fbReady = true;
       return false;
@@ -695,6 +701,7 @@ async function pushAllToFB() {
     saveCollectionToFB('employees', employees),
     saveCollectionToFB('restockLog', restockLog),
     saveCollectionToFB('preorders', preorders),
+    saveCollectionToFB('closings', closings),
     saveDocToFB('config', 'shopConfig', shopConfig),
     saveDocToFB('config', 'tierConfig', { tiers: tierConfig }),
   ]);
@@ -715,7 +722,7 @@ function diffChanged(colName, arr, idField = 'id') {
 async function syncChangedToFB() {
   if (!db) return;
   try {
-    const colData = { products, members, orders, employees, restockLog, preorders };
+    const colData = { products, members, orders, employees, restockLog, preorders, closings };
     const jobs = [];
     Object.keys(colData).forEach(colName => {
       const changed = diffChanged(colName, colData[colName]);
@@ -732,7 +739,7 @@ async function syncChangedToFB() {
     // 寫入成功後，把這次的內容標記為「已同步」基準
     lastSyncedSnapshot = {
       products: sanitize(products), members: sanitize(members), orders: sanitize(orders),
-      employees: sanitize(employees), restockLog: sanitize(restockLog), preorders: sanitize(preorders),
+      employees: sanitize(employees), restockLog: sanitize(restockLog), preorders: sanitize(preorders), closings: sanitize(closings),
       shopConfig: sanitize(shopConfig), tierConfig: sanitize(tierConfig),
     };
   } catch(e) { console.warn('syncChangedToFB error:', e); throw e; }
@@ -794,6 +801,7 @@ function startRealtimeSync() {
   listen('orders',     d => { orders     = d.sort((a,b)=>b.date.localeCompare(a.date)); });
   listen('employees',  d => { employees  = d; });
   listen('restockLog', d => { restockLog = d.sort((a,b)=>b.ts?.localeCompare(a.ts)); });
+  listen('closings',  d => { closings  = d.sort((a,b)=>(b.date||'').localeCompare(a.date||'')); });
   listen('preorders',  d => { preorders  = d.sort((a,b)=>(b.date||'').localeCompare(a.date||'')); });
   db.collection('config').onSnapshot(snap => {
     if (!fbReady) return;
@@ -886,7 +894,7 @@ function getRolePin() { return localStorage.getItem(ROLE_PIN_KEY) || '5678'; }
 function currentRole() { return sessionStorage.getItem('wm_role') || null; }
 function isStaffMode() { return currentRole() === 'staff'; }
 // 店員模式下唯一開放的頁面：其餘（報表、闆娘分帳、員工管理、賣貨便月結、資料管理、管理設定）一律視為闆娘專用
-const STAFF_ALLOWED_PAGES = ['pos', 'inventory', 'orders', 'members', 'preorder'];
+const STAFF_ALLOWED_PAGES = ['pos', 'inventory', 'orders', 'members', 'preorder', 'closing'];
 
 (function initRoleGate() {
   const gate = document.getElementById('role-gate');
@@ -1007,6 +1015,8 @@ let externalOrders = []; // 賣貨便匯入的訂單
 
 let employees = [];
 
+let closings = []; // 日結關班紀錄：每天一筆，id='CLOSE-YYYY-MM-DD'
+let closingDate = null; // 日結頁目前檢視的日期（null＝今天）
 let preorders = []; // 客人預購商品清單：[{id, customer, phone, itemName, spec, qty, price, note, status, date}]
 
 // ══ STATE ══
@@ -1222,7 +1232,7 @@ updateDeviceBadge();
 window.addEventListener('resize', updateDeviceBadge);
 
 // ══ NAV ══
-const PAGE_TITLES = {pos:'結帳收銀',inventory:'庫存管理',orders:'訂單管理',preorder:'客人預購',reports:'報表統計',split:'闆娘分帳',members:'會員管理',settings:'管理設定',employees:'員工管理',sellship:'賣貨便月結',datamanage:'資料管理'};
+const PAGE_TITLES = {pos:'結帳收銀',inventory:'庫存管理',orders:'訂單管理',preorder:'客人預購',closing:'日結關班',reports:'報表統計',split:'闆娘分帳',members:'會員管理',settings:'管理設定',employees:'員工管理',sellship:'賣貨便月結',datamanage:'資料管理'};
 const PF = {};
 
 function navigateTo(page) {
@@ -1596,7 +1606,7 @@ function cartKeyOf(it) { return it.variantId ? (it.id + '::' + it.variantId) : i
 function renderCartItems() {
   const el = ge('cp-items'); if (!el) return;
   const cnt = ge('cp-cnt');
-  if (cnt) cnt.textContent = cart.length > 0 ? cart.reduce((s,x)=>s+x.qty,0) + ' 件' : '';
+  if (cnt) cnt.textContent = cart.length > 0 ? '共 ' + cart.length + ' 樣商品・' + cart.reduce((s,x)=>s+x.qty,0) + ' 件' : '';
   if (cart.length === 0) {
     el.innerHTML = '<div class="cp-em">' + IC.cart + '<div class="cp-em-txt">點選左側商品加入</div></div>';
   } else {
@@ -1675,7 +1685,7 @@ function openCheckoutModal() {
     : 0;
   let curTot = Math.max(0, sub - dAmt - discountFix - ptDeduct);
 
-  const payMethods = ['現金','信用卡','Line Pay','街口','悠遊卡','轉帳'];
+  const payMethods = ['現金','轉帳','Line Pay']; // 店內只收這三種（無發票）；舊訂單裡已存的其他付款方式紀錄不受影響
 
   const ov = document.createElement('div');
   ov.className = 'ovm';
@@ -2311,7 +2321,8 @@ function openProdModal(id) {
       '<div class="mbd" style="display:flex;flex-direction:column;gap:14px">' +
         '<div class="fg" style="margin:0"><label>商品名稱</label><input class="fi" id="pf-nm" placeholder="請輸入商品名稱" value="' + (p?.name||'') + '"></div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
-          '<div class="fg" style="margin:0"><label>分類</label><select class="fs" id="pf-cat">' + cats.map(c=>'<option'+(p?.cat===c?' selected':'')+'>'+c+'</option>').join('') + '<option value="_new">＋ 新增分類</option></select></div>' +
+          '<div class="fg" style="margin:0"><label>分類</label><select class="fs" id="pf-cat">' + cats.map(c=>'<option'+(p?.cat===c?' selected':'')+'>'+c+'</option>').join('') + '<option value="_new"' + (cats.length===0?' selected':'') + '>＋ 新增分類</option></select>' +
+            '<input class="fi" id="pf-cat-new" placeholder="輸入新分類名稱，例如：飼料" style="margin-top:6px;display:' + (cats.length===0?'block':'none') + '"></div>' +
           '<div class="fg" style="margin:0"><label>歸屬闆娘</label><select class="fs" id="pf-own">' + shopConfig.owners.map(o => '<option'+(p?.owner===o?' selected':'')+'>'+o+'</option>').join('') + '<option value="共同"'+(p?.owner==="共同"?' selected':'')+'>⚖ 共同均攤</option></select></div>' +
         '</div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
@@ -2341,8 +2352,16 @@ function openProdModal(id) {
   ov.querySelector('#pm-x').addEventListener('click', close);
   ov.querySelector('#pm-cancel').addEventListener('click', close);
 
+  // 選到「＋ 新增分類」時，直接在下方跳出輸入框填名稱（不再等到按儲存才跳出視窗）
+  ov.querySelector('#pf-cat').addEventListener('change', function() {
+    const inp = ov.querySelector('#pf-cat-new');
+    inp.style.display = this.value === '_new' ? 'block' : 'none';
+    if (this.value === '_new') inp.focus();
+  });
+
   ov.querySelector('#pf-bc-gen').addEventListener('click', () => {
-    const cat = ge('pf-cat').value;
+    let cat = ge('pf-cat').value;
+    if (cat === '_new') cat = (ge('pf-cat-new').value || '').trim();
     let prefix = (shopConfig.catPrefixes[cat] || '').trim().toUpperCase();
     if (!prefix) {
       prefix = 'P';
@@ -2420,7 +2439,10 @@ function openProdModal(id) {
 
   ov.querySelector('#pm-save').addEventListener('click', () => {
     let cat = ge('pf-cat').value;
-    if (cat === '_new') { cat = prompt('輸入新分類名稱：') || '其他'; }
+    if (cat === '_new') {
+      cat = ge('pf-cat-new').value.trim();
+      if (!cat) { alert('請輸入新分類的名稱'); ge('pf-cat-new').focus(); return; }
+    }
     const useVariants = toggle.checked;
     const finalVariants = useVariants ? editVariants.filter(v => v.name && v.name.trim()).map(v => ({id:v.id, name:v.name.trim(), stock:Math.max(0,parseInt(v.stock)||0), price: v.price>0 ? v.price : null, cost: v.cost>0 ? v.cost : null})) : [];
     const stockVal = useVariants ? finalVariants.reduce((s,v)=>s+v.stock,0) : (+ge('pf-st').value || 0);
@@ -3084,6 +3106,217 @@ function renderPreorderTable() {
     PF.preorder();
   }));
 }
+
+// ══════════════════════════════════════
+// CLOSING（日結關班）：無發票，只收 現金／轉帳／LINE Pay；LINE Pay 手續費 2.31%
+// ══════════════════════════════════════
+const LINEPAY_FEE_RATE = 0.0231;
+let closingDraft = {}; // 每個日期各自暫存輸入中的內容，頁面被同步重繪時不會把店員打到一半的數字洗掉
+function payBucket(p) {
+  const s = String(p || '').replace(/\s/g, '').toLowerCase();
+  return s === '現金' ? 'cash' : s === '轉帳' ? 'bank' : s === 'linepay' ? 'line' : 'other';
+}
+function calcDayFigures(date) {
+  const list = orders.filter(o => o.date === date && (o.status === '完成' || o.status === '部分退款'));
+  let cash = 0, bank = 0, line = 0, other = 0; const otherNames = new Set();
+  list.forEach(o => {
+    const t = o.total || 0, b = payBucket(o.payment);
+    if (b === 'cash') cash += t; else if (b === 'bank') bank += t; else if (b === 'line') line += t;
+    else { other += t; otherNames.add(o.payment || '未填'); }
+  });
+  const fee = Math.round(line * LINEPAY_FEE_RATE);
+  return { n: list.length, cash, bank, line, other, otherNames: [...otherNames], total: cash + bank + line,
+           fee, net: line - fee, pending: orders.filter(o => o.date === date && o.status === '處理中').length };
+}
+function exportClosingsExcel() {
+  if (typeof XLSX === 'undefined') { showToast('試算表套件尚未載入，請稍後再試'); return; }
+  if (!closings.length) { showToast('還沒有任何日結紀錄可以匯出'); return; }
+  const list = [...closings].sort((a, b) => a.date.localeCompare(b.date));
+  const head = ['日期','訂單筆數','總營業額','現金收入','轉帳收入','LINE Pay總額','LINE Pay手續費','LINE Pay實際淨收',
+                '開班備用金','店員實收現金','備留明日找零金','應繳回現金','現金長短差','備註','結班時間','結班身份'];
+  const aoa = [head, ...list.map(c => [c.date, c.orderCount, c.total, c.cash, c.bank, c.linePay, c.lpFee, c.lpNet,
+    c.opening, c.actualCash, c.nextFloat, c.shouldRemit, c.diff, c.note || '', (c.closedAt || '').replace('T', ' ').slice(0, 16), c.closedBy || ''])];
+  const tot = ['合計', list.reduce((s,c)=>s+(c.orderCount||0),0), 0, 0, 0, 0, 0, 0, '', '', '', '', 0, '', '', ''];
+  const keys = { 2:'total', 3:'cash', 4:'bank', 5:'linePay', 6:'lpFee', 7:'lpNet', 12:'diff' };
+  Object.keys(keys).forEach(i => { tot[i] = list.reduce((s, c) => s + (c[keys[i]] || 0), 0); });
+  aoa.push(tot);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = head.map((h, i) => ({ wch: i === 13 ? 28 : i === 14 ? 17 : 13 }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '日結紀錄');
+  XLSX.writeFile(wb, '熊星研所_日結紀錄_匯出於' + today() + '.xlsx');
+}
+
+PF.closing = function() {
+  const todayStr = today();
+  if (!closingDate) closingDate = todayStr;
+  const date = closingDate, isToday = date === todayStr;
+  const rec = closings.find(c => c.id === 'CLOSE-' + date);
+  const f = calcDayFigures(date);
+  const prev = closings.filter(c => c.date < date).sort((a, b) => b.date.localeCompare(a.date))[0];
+  const draft = closingDraft[date] = closingDraft[date] || { opening: '', actual: '', next: '', note: '' };
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+  const money = n => (n < 0 ? '-' : '') + '$' + Math.abs(Math.round(n)).toLocaleString();
+  const lock = !!rec;
+  const openingFixed = lock || !!prev;
+  const openingVal = lock ? rec.opening : (prev ? (prev.nextFloat || 0) : (parseInt(draft.opening) || 0));
+  const dayWord = isToday ? '今日' : '當日';
+
+  ge('tb-act').innerHTML =
+    '<input type="date" id="cl-date" class="fi" value="' + date + '" max="' + todayStr + '" style="width:150px;margin-right:8px">' +
+    '<button class="btn btn-o" id="cl-export">' + IC.dl + ' 匯出日結 Excel</button>';
+
+  const row = (label, val, o = {}) =>
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--p2)">' +
+      '<span style="font-size:14px;color:' + (o.sub ? 'var(--txt3)' : 'var(--txt2)') + '">' + label + '</span>' +
+      '<span style="font-family:var(--en);font-weight:' + (o.big ? 800 : 700) + ';font-size:' + (o.big ? '22px' : '16px') + ';color:' + (o.color || 'var(--ink)') + '">' + val + '</span></div>';
+  const inp = (id, label, val, hint, disabled) =>
+    '<div style="padding:11px 0;border-bottom:1px solid var(--p2)">' +
+      '<label style="display:block;font-size:14px;color:var(--txt2);margin-bottom:6px">' + label + '</label>' +
+      '<input class="fi" id="' + id + '" type="number" inputmode="numeric" min="0" placeholder="0" value="' + esc(val) + '"' + (disabled ? ' disabled' : '') +
+        ' style="font-size:20px;font-family:var(--en);font-weight:700;padding:10px 12px;width:100%' + (disabled ? ';background:var(--p2)' : '') + '">' +
+      (hint ? '<div style="font-size:11.5px;color:var(--txt3);margin-top:5px">' + hint + '</div>' : '') +
+    '</div>';
+  const drift = lock && (rec.total !== f.total || rec.cash !== f.cash || rec.bank !== f.bank || rec.linePay !== f.line);
+
+  const warnBox = (txt, bg, bd) => '<div style="background:' + bg + ';border:1px solid ' + bd + ';border-radius:var(--r);padding:10px 14px;margin-bottom:12px;font-size:13px;line-height:1.6">' + txt + '</div>';
+
+  ge('pg').innerHTML =
+    '<div style="max-width:720px;margin:0 auto">' +
+    (lock
+      ? warnBox('🔒 <strong>' + date + ' 已日結關班</strong>　' + (rec.closedAt || '').replace('T', ' ').slice(0, 16) + '　結班身份：' + esc(rec.closedBy || '') +
+          (!isStaffMode() ? '　<button class="btn btn-o btn-sm" id="cl-reopen" style="margin-left:6px">解除日結（闆娘）</button>' : ''), '#e9f5ea', '#b8dcb9')
+      : warnBox('📝 <strong>' + date + (isToday ? '（今天）' : '') + ' 尚未日結</strong>　請先確認今天的訂單都已結帳，再點收現金。', '#fff8e6', '#ffe08a')) +
+    (drift ? warnBox('⚠ <strong>日結後這天的訂單有異動</strong>（例如事後退款）。日結當時總營業額 ' + money(rec.total) + '，目前系統算出 ' + money(f.total) + '。請闆娘確認是否需要處理。', '#fdecea', '#f5c0bd') : '') +
+    (f.pending > 0 && !lock ? warnBox('⚠ 這天還有 <strong>' + f.pending + ' 筆「處理中」</strong>的訂單，尚未計入下面的數字。', '#fff8e6', '#ffe08a') : '') +
+    (f.other > 0 ? warnBox('⚠ 這天有 <strong>' + money(f.other) + '</strong> 是用「' + esc(f.otherNames.join('、')) + '」收的款，不在現金／轉帳／LINE Pay 三種裡，<strong>沒有</strong>算進下面的總營業額，請另外確認。', '#fdecea', '#f5c0bd') : '') +
+
+    // ① 系統帳面數據
+    '<div class="card" style="margin-bottom:14px"><div class="card-hd"><span class="card-ttl">① 系統帳面數據</span><span style="font-size:11px;color:var(--txt3);font-weight:400">自動加總・不能修改・共 ' + f.n + ' 筆訂單</span></div>' +
+      '<div style="padding:4px 18px 8px">' +
+        row(dayWord + '總營業額', money(f.total), { big: true, color: 'var(--cr)' }) +
+        row('現金收入總額', money(f.cash)) +
+        row('轉帳收入總額', money(f.bank)) +
+        row('LINE Pay 總額', money(f.line)) +
+        row('LINE Pay 手續費（' + (LINEPAY_FEE_RATE * 100).toFixed(2) + '%，四捨五入）', '-' + money(f.fee).replace('-', ''), { sub: true, color: 'var(--cr)' }) +
+        row('LINE Pay 實際淨收', money(f.net)) +
+      '</div></div>' +
+
+    // ② 店員人工點收
+    '<div class="card" style="margin-bottom:14px"><div class="card-hd"><span class="card-ttl">② 店員人工點收</span></div>' +
+      '<div style="padding:4px 18px 8px">' +
+        inp('cl-opening', dayWord + '開班備用金', openingVal,
+          lock ? '' : (prev ? '系統自動帶入：' + prev.date + ' 日結時備留的找零金' : '還沒有前一天的日結紀錄，第一次請手動輸入'), openingFixed) +
+        inp('cl-actual', '店員實收現金（數錢後輸入）', lock ? rec.actualCash : draft.actual, '', lock) +
+        inp('cl-next', '備留明日找零金', lock ? rec.nextFloat : draft.next, '明天開班要留在抽屜的零錢，沒有請填 0', lock) +
+        '<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;margin-top:10px;background:var(--p2);border-radius:var(--r)">' +
+          '<div><div style="font-size:14px;font-weight:700;color:var(--ink)">系統計算應繳回現金</div>' +
+          '<div style="font-size:11.5px;color:var(--txt3);margin-top:2px">開班備用金 ＋ 現金收入總額 － 明日找零金</div></div>' +
+          '<span id="cl-remit" style="font-family:var(--en);font-weight:800;font-size:22px;color:var(--ink)"></span></div>' +
+      '</div></div>' +
+
+    // ③ 核對與關班
+    '<div class="card" style="margin-bottom:14px"><div class="card-hd"><span class="card-ttl">③ 自動核對與關班</span></div>' +
+      '<div style="padding:14px 18px">' +
+        '<div id="cl-diffbox" style="border-radius:var(--r);padding:14px;text-align:center;margin-bottom:6px;border:1.5px solid var(--p3)">' +
+          '<div style="font-size:13px;color:var(--txt3);margin-bottom:4px">現金長短水差（實收 － 開班備用金 － 現金收入）</div>' +
+          '<div id="cl-diff" style="font-family:var(--en);font-weight:800;font-size:28px"></div></div>' +
+        '<label style="display:block;font-size:14px;color:var(--txt2);margin:12px 0 6px">備註說明 <span id="cl-note-req" style="color:var(--cr);font-size:12px"></span></label>' +
+        '<textarea class="fi" id="cl-note" rows="3" placeholder="金額不符時請寫原因，例如：找錯錢、客人少給、先拿零錢買東西…"' + (lock ? ' disabled' : '') +
+          ' style="font-size:15px;line-height:1.6;width:100%;resize:vertical' + (lock ? ';background:var(--p2)' : '') + '">' + esc(lock ? rec.note : draft.note) + '</textarea>' +
+        (lock ? '' : '<button class="btn btn-p" id="cl-confirm" style="width:100%;justify-content:center;font-size:17px;padding:15px;margin-top:14px;border-radius:14px">🔒 確認日結關班</button>' +
+          '<div style="font-size:11.5px;color:var(--txt3);text-align:center;margin-top:8px">確認後會鎖定這天的日結紀錄並存檔，之後不能自己修改</div>') +
+      '</div></div>' +
+
+    // 歷史日結
+    '<div class="card"><div class="card-hd"><span class="card-ttl">📚 日結紀錄</span><span style="font-size:11px;color:var(--txt3);font-weight:400">共 ' + closings.length + ' 天</span></div>' +
+      '<div class="tw"><table><thead><tr><th>日期</th><th>總營業額</th><th>現金</th><th>轉帳</th><th>LINE Pay 淨收</th><th>長短差</th><th>備註</th><th></th></tr></thead><tbody>' +
+      (closings.length === 0
+        ? '<tr><td colspan="8" style="text-align:center;padding:26px;color:var(--txt3)">還沒有日結紀錄</td></tr>'
+        : [...closings].sort((a, b) => b.date.localeCompare(a.date)).map(c =>
+            '<tr' + (c.date === date ? ' style="background:var(--p2)"' : '') + '>' +
+              '<td style="font-weight:600;white-space:nowrap">' + c.date + '</td>' +
+              '<td class="tn" style="font-weight:600">' + money(c.total) + '</td>' +
+              '<td class="tn">' + money(c.cash) + '</td><td class="tn">' + money(c.bank) + '</td><td class="tn">' + money(c.lpNet) + '</td>' +
+              '<td class="tn" style="font-weight:700;color:' + (c.diff === 0 ? '#1e6b2e' : '#c0392b') + '">' + (c.diff === 0 ? '✓ 0' : (c.diff > 0 ? '+' : '') + money(c.diff)) + '</td>' +
+              '<td style="font-size:12px;color:var(--txt3);max-width:160px;white-space:normal">' + esc(c.note || '') + '</td>' +
+              '<td><button class="btn btn-o btn-sm cl-view" data-d="' + c.date + '">查看</button></td></tr>').join('')) +
+      '</tbody></table></div></div></div>';
+
+  // ── 即時計算（只更新數字，不重繪整頁，打字才不會被中斷）──
+  function recalc() {
+    const opening = lock ? rec.opening : (prev ? (prev.nextFloat || 0) : (parseInt(ge('cl-opening').value) || 0));
+    const actualRaw = lock ? String(rec.actualCash) : ge('cl-actual').value.trim();
+    const actual = parseInt(actualRaw) || 0, next = parseInt(lock ? rec.nextFloat : ge('cl-next').value) || 0;
+    const remit = opening + f.cash - next;
+    ge('cl-remit').textContent = money(remit);
+    const box = ge('cl-diff'), wrap = ge('cl-diffbox'), req = ge('cl-note-req');
+    if (actualRaw === '') {
+      box.textContent = '—'; box.style.color = 'var(--txt3)'; wrap.style.background = ''; wrap.style.borderColor = 'var(--p3)';
+      if (req) req.textContent = '';
+      return { opening, actual, next, remit, diff: null };
+    }
+    const diff = actual - (opening + f.cash);
+    if (diff === 0) {
+      box.textContent = '✓ 帳實相符　$0'; box.style.color = '#1e6b2e'; wrap.style.background = '#e9f5ea'; wrap.style.borderColor = '#b8dcb9';
+      if (req) req.textContent = '';
+    } else {
+      box.textContent = diff < 0 ? '短少 ' + money(-diff) : '長款 +' + money(diff); box.style.color = '#c0392b';
+      wrap.style.background = '#fdecea'; wrap.style.borderColor = '#f5c0bd';
+      if (req && !lock) req.textContent = '（金額不符，必須填寫原因）';
+    }
+    return { opening, actual, next, remit, diff };
+  }
+  recalc();
+
+  ge('cl-date').addEventListener('change', function() { if (this.value) { closingDate = this.value; PF.closing(); } });
+  ge('cl-export').addEventListener('click', exportClosingsExcel);
+  ge('pg').querySelectorAll('.cl-view').forEach(b => b.addEventListener('click', () => { closingDate = b.dataset.d; PF.closing(); }));
+
+  if (lock) {
+    ge('cl-reopen')?.addEventListener('click', async () => {
+      if (!confirm('確定要解除 ' + date + ' 的日結嗎？\n解除後這筆日結紀錄會被刪除，需要重新點收並再日結一次。')) return;
+      closings = closings.filter(c => c.id !== rec.id);
+      saveToLocal();
+      if (fbReady) { try { await deleteDocFromFB('closings', rec.id); } catch (e) { console.warn(e); } }
+      showToast('已解除日結');
+      PF.closing();
+    });
+    return;
+  }
+
+  ['cl-opening', 'cl-actual', 'cl-next', 'cl-note'].forEach(id => {
+    const el = ge(id); if (!el || el.disabled) return;
+    el.addEventListener('input', () => {
+      draft.opening = ge('cl-opening').value; draft.actual = ge('cl-actual').value;
+      draft.next = ge('cl-next').value; draft.note = ge('cl-note').value;
+      recalc();
+    });
+  });
+
+  ge('cl-confirm').addEventListener('click', () => {
+    if (date > todayStr) { alert('不能對未來的日期日結'); return; }
+    if (closings.find(c => c.id === 'CLOSE-' + date)) { alert('這天已經日結過了'); return; }
+    const r = recalc();
+    if (ge('cl-actual').value.trim() === '') { alert('請輸入「店員實收現金」'); ge('cl-actual').focus(); return; }
+    if (ge('cl-next').value.trim() === '') { alert('請輸入「備留明日找零金」（沒有請填 0）'); ge('cl-next').focus(); return; }
+    if (r.next > r.actual) { alert('備留明日找零金（' + money(r.next) + '）不能大於店員實收現金（' + money(r.actual) + '）'); ge('cl-next').focus(); return; }
+    const note = ge('cl-note').value.trim();
+    if (r.diff !== 0 && !note) { alert('現金長短差不是 0（' + money(r.diff) + '），請在備註寫下原因再日結'); ge('cl-note').focus(); return; }
+    if (f.pending > 0 && !confirm('這天還有 ' + f.pending + ' 筆「處理中」的訂單沒有計入，確定要日結嗎？')) return;
+    if (!confirm('確定要「' + date + '」日結關班嗎？\n\n' + dayWord + '總營業額 ' + money(f.total) + '\n現金長短差 ' + money(r.diff) + '\n應繳回現金 ' + money(r.remit) + '\n\n確認後會鎖定這天的紀錄。')) return;
+    closings.unshift({
+      id: 'CLOSE-' + date, date, closedAt: new Date().toISOString(), closedBy: isStaffMode() ? '店員' : '闆娘',
+      orderCount: f.n, total: f.total, cash: f.cash, bank: f.bank, linePay: f.line, lpFee: f.fee, lpNet: f.net,
+      opening: r.opening, actualCash: r.actual, nextFloat: r.next, shouldRemit: r.remit, diff: r.diff, note,
+      otherPay: f.other,
+    });
+    delete closingDraft[date];
+    saveToLocal();
+    showToast('✅ ' + date + ' 日結完成');
+    PF.closing();
+  });
+};
 
 PF.reports = function() {
   const exportOrderBtn = document.createElement('button');
@@ -4494,7 +4727,7 @@ PF.datamanage = function() {
       if (db) {
         try {
           showToast('正在清除雲端資料…');
-          const cols = ['products','members','orders','employees','restockLog','preorders','config'];
+          const cols = ['products','members','orders','employees','restockLog','preorders','closings','config'];
           for (const col of cols) {
             const snap = await db.collection(col).get();
             if (!snap.empty) {
@@ -4525,7 +4758,7 @@ PF.datamanage = function() {
     if (!confirm('確定要清除 Firebase 雲端所有資料嗎？')) return;
     if (statusEl) statusEl.textContent = '⏳ 正在連線 Firebase…';
     try {
-      const cols = ['products','members','orders','employees','restockLog','preorders','config'];
+      const cols = ['products','members','orders','employees','restockLog','preorders','closings','config'];
       let total = 0;
       for (const col of cols) {
         if (statusEl) statusEl.textContent = '⏳ 清除 ' + col + '…';
@@ -4549,7 +4782,7 @@ PF.datamanage = function() {
       }
       if (statusEl) statusEl.textContent = '✅ 雲端已清除 ' + total + ' 筆資料！刷新頁面生效';
       // Reset local state too
-      products = []; members = []; orders = []; employees = []; restockLog = []; preorders = [];
+      products = []; members = []; orders = []; employees = []; restockLog = []; preorders = []; closings = [];
       saveToLocal();
       showToast('✅ Firebase 雲端已清除！');
     } catch(e) {
@@ -4671,7 +4904,7 @@ function saveToLocal() {
   try {
     const data = {
       products, members, orders, externalOrders, employees,
-      tierConfig, shopConfig, restockLog, preorders,
+      tierConfig, shopConfig, restockLog, preorders, closings,
       savedAt: new Date().toISOString(),
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -4691,6 +4924,7 @@ function loadFromLocal() {
     if (data.employees)  employees  = data.employees;
     if (data.tierConfig) tierConfig = data.tierConfig;
     if (data.preorders)  preorders  = data.preorders;
+    if (data.closings)   closings   = data.closings;
     if (data.shopConfig) {
       Object.assign(shopConfig, data.shopConfig);
       if (!shopConfig.pointsRate) shopConfig.pointsRate = 100;
@@ -4714,7 +4948,7 @@ function exportBackup() {
     _version: '1.1',
     _app: 'WoolyBear POS',
     _exportedAt: new Date().toISOString(),
-    products, members, orders, externalOrders, employees, tierConfig, shopConfig, restockLog, preorders,
+    products, members, orders, externalOrders, employees, tierConfig, shopConfig, restockLog, preorders, closings,
   };
   const json = JSON.stringify(data, null, 2);
   const BOM  = '﻿';
@@ -4771,13 +5005,15 @@ function importBackup(file) {
           else restockLog = [];
           if (data.preorders) preorders = data.preorders;
           else preorders = [];
+          if (data.closings) closings = data.closings;
+          else closings = [];
           saveToLocal();
           if (fbReady) {
             pushAllToFB().then(() => {
               // 還原是整批覆蓋，寫完後把這份內容標記為已同步基準，避免之後又被誤判成「變動過」重寫一次
               lastSyncedSnapshot = {
                 products: sanitize(products), members: sanitize(members), orders: sanitize(orders),
-                employees: sanitize(employees), restockLog: sanitize(restockLog), preorders: sanitize(preorders),
+                employees: sanitize(employees), restockLog: sanitize(restockLog), preorders: sanitize(preorders), closings: sanitize(closings),
                 shopConfig: sanitize(shopConfig), tierConfig: sanitize(tierConfig),
               };
               showToast('✅ 還原成功並同步至雲端（備份日期：' + exportedAt + '）');
