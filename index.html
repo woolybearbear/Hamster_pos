@@ -2104,6 +2104,114 @@ function showReceiptModal(order, member, onClose) {
 // ══════════════════════════════════════
 // INVENTORY PAGE
 // ══════════════════════════════════════
+// ══════════════════════════════════════
+// 庫存匯出 Excel（詳細版：每個規格各一列，附客人預購需求與叫貨試算，方便算貨、叫貨）
+// ══════════════════════════════════════
+function exportInventoryExcel() {
+  if (typeof XLSX === 'undefined') { alert('Excel 匯出元件還沒載入完成（需要網路），請稍後再試一次'); return; }
+  if (!products.length) { showToast('目前沒有商品可以匯出'); return; }
+  const norm = s => String(s || '').trim().toLowerCase();
+  const rm = heldReserveMap();
+
+  // 客人預購（還沒叫貨的）依「商品名稱＋款式」對應到庫存商品，算出每個商品／規格被預購了多少
+  const pendingPre = preorders.filter(x => x.status !== '已叫貨');
+  const matchPre = it => {
+    const p = products.find(x => norm(x.name) === norm(it.itemName));
+    if (!p) return { p: null, v: null, ok: false, why: '庫存裡沒有這個商品' };
+    if (p.variants && p.variants.length) {
+      const v = p.variants.find(x => norm(x.name) === norm(it.spec));
+      return v ? { p, v, ok: true, why: '' } : { p, v: null, ok: false, why: '有這個商品，但款式對不上任何規格' };
+    }
+    return { p, v: null, ok: true, why: '' };
+  };
+  const demand = {};
+  const preLines = [];
+  pendingPre.forEach(pre => (pre.items || []).forEach(it => {
+    const m = matchPre(it);
+    if (m.ok) { const k = m.v ? m.p.id + '::' + m.v.id : m.p.id; demand[k] = (demand[k] || 0) + (it.qty || 0); }
+    preLines.push([pre.date, pre.customer, pre.phone || '', it.itemName, it.spec || '', it.qty || 0, it.price || 0, it.owner || '共同',
+      pre.checkedOut ? '已結帳' : '尚未結帳', m.ok ? '是' : '否：' + m.why, pre.note || '']);
+  }));
+
+  // ── 工作表1：庫存明細 ──
+  const head = ['分類','商品名稱','規格','條碼/SKU','歸屬闆娘','單位','售價','成本','目前庫存','暫存保留','可賣庫存','低庫存門檻','庫存狀態','客人預購待叫貨','建議最少叫貨量','預計叫貨數量（自填）','預估進貨金額','庫存成本價值'];
+  const aoa = [head];
+  const meta = [];
+  const sorted = [...products].sort((a, b) => String(a.cat || '').localeCompare(String(b.cat || ''), 'zh-Hant') || (a.sortOrder ?? 999) - (b.sortOrder ?? 999));
+  let nOut = 0, nLow = 0, totalValue = 0, nVariantRows = 0;
+  sorted.forEach(p => {
+    const lines = (p.variants && p.variants.length)
+      ? p.variants.map(v => ({ spec: v.name, price: variantPrice(p, v), cost: variantCost(p, v) || 0, stock: v.stock || 0, reserved: variantReserved(p, v, rm), key: p.id + '::' + v.id, isVar: true }))
+      : [{ spec: p.spec || '', price: p.price || 0, cost: p.cost || 0, stock: p.stock || 0, reserved: productReserved(p, rm), key: p.id, isVar: false }];
+    lines.forEach(ln => {
+      const low = p.lowStock ?? 5;
+      const status = ln.stock <= 0 ? '缺貨' : ln.stock <= low ? '偏低' : '正常';
+      if (status === '缺貨') nOut++; else if (status === '偏低') nLow++;
+      if (ln.isVar) nVariantRows++;
+      const dem = demand[ln.key] || 0;
+      const suggest = Math.max(0, low - ln.stock) + dem;
+      totalValue += ln.stock * ln.cost;
+      aoa.push([p.cat || '', p.name, ln.spec, p.barcode || '', p.owner || '', p.unit || '', ln.price, ln.cost, ln.stock, ln.reserved,
+        Math.max(0, ln.stock - ln.reserved), low, status, dem, suggest, '', 0, ln.stock * ln.cost]);
+      meta.push({ stock: ln.stock, cost: ln.cost, low, dem, suggest });
+    });
+  });
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  meta.forEach((m, i) => {
+    const r = i + 2;
+    ws['O' + r] = { t: 'n', v: m.suggest, f: 'MAX(0,L' + r + '-I' + r + ')+N' + r };   // 建議最少叫貨量＝補到低庫存門檻＋客人預購
+    ws['Q' + r] = { t: 'n', v: 0, f: 'P' + r + '*H' + r };                              // 預估進貨金額＝預計叫貨數量×成本
+    ws['R' + r] = { t: 'n', v: m.stock * m.cost, f: 'I' + r + '*H' + r };               // 庫存成本價值＝庫存×成本
+    ['G','H','Q','R'].forEach(c => { if (ws[c + r]) ws[c + r].z = '#,##0'; });
+  });
+  const last = meta.length + 1, tot = last + 1;
+  XLSX.utils.sheet_add_aoa(ws, [['合計']], { origin: 'A' + tot });
+  ws['I' + tot] = { t: 'n', v: meta.reduce((s, m) => s + m.stock, 0), f: 'SUM(I2:I' + last + ')' };
+  ws['N' + tot] = { t: 'n', v: meta.reduce((s, m) => s + m.dem, 0), f: 'SUM(N2:N' + last + ')' };
+  ws['O' + tot] = { t: 'n', v: meta.reduce((s, m) => s + m.suggest, 0), f: 'SUM(O2:O' + last + ')' };
+  ws['Q' + tot] = { t: 'n', v: 0, f: 'SUM(Q2:Q' + last + ')', z: '#,##0' };
+  ws['R' + tot] = { t: 'n', v: totalValue, f: 'SUM(R2:R' + last + ')', z: '#,##0' };
+  ws['!ref'] = 'A1:R' + tot;
+  ws['!autofilter'] = { ref: 'A1:R' + last };
+  ws['!cols'] = [10,22,14,12,9,6,8,8,9,9,9,10,9,12,12,16,12,12].map(w => ({ wch: w }));
+
+  // ── 工作表2：客人預購待叫貨明細 ──
+  const preHead = ['登記日期','客戶','電話','商品名稱','款式','數量','單價','歸屬闆娘','結帳狀態','對應到庫存商品？','備註'];
+  const ws2 = XLSX.utils.aoa_to_sheet([preHead, ...(preLines.length ? preLines : [['目前沒有待叫貨的客人預購']])]);
+  ws2['!cols'] = [11,12,12,22,14,7,8,9,10,26,20].map(w => ({ wch: w }));
+
+  // ── 工作表3：說明與摘要 ──
+  const note = [
+    ['庫存匯出摘要', ''],
+    ['匯出時間', new Date().toLocaleString('zh-TW')],
+    ['商品數', products.length],
+    ['明細列數（有規格的商品，每個規格一列）', meta.length],
+    ['其中規格列數', nVariantRows],
+    ['缺貨', nOut],
+    ['偏低', nLow],
+    ['庫存成本價值合計', Math.round(totalValue)],
+    ['待叫貨的客人預購件數', meta.reduce((s, m) => s + m.dem, 0) + preLines.filter(l => String(l[9]).startsWith('否')).reduce((s, l) => s + l[5], 0)],
+    ['', ''],
+    ['欄位說明', ''],
+    ['暫存保留', '收銀台暫存清單裡先保留的數量（還沒結帳，真正庫存還沒扣）'],
+    ['可賣庫存', '目前庫存 − 暫存保留'],
+    ['低庫存門檻', '沿用商品設定的低庫存數字；有規格的商品，每個規格都用同一個門檻各自比較'],
+    ['客人預購待叫貨', '「客人預購」頁面裡狀態還不是「已叫貨」的預購，依商品名稱＋款式對應到這一列'],
+    ['建議最少叫貨量', '= 補到低庫存門檻需要的數量 + 客人預購待叫貨（可以自己改門檻，會自動重算）'],
+    ['預計叫貨數量（自填）', '你決定要叫的數量，填了之後「預估進貨金額」會自動用成本算出來'],
+    ['對不上庫存的預購', '看第二張工作表「客人預購待叫貨明細」，標「否」的是庫存裡找不到的商品或款式，叫貨時要另外加上'],
+  ];
+  const ws3 = XLSX.utils.aoa_to_sheet(note);
+  ws3['!cols'] = [{ wch: 34 }, { wch: 70 }];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '庫存明細');
+  XLSX.utils.book_append_sheet(wb, ws2, '客人預購待叫貨明細');
+  XLSX.utils.book_append_sheet(wb, ws3, '說明與摘要');
+  XLSX.writeFile(wb, '熊星研所_庫存明細_匯出於' + today() + '.xlsx');
+  showToast('✅ 已匯出庫存明細 Excel（共 ' + meta.length + ' 列）');
+}
+
 PF.inventory = function() {
   const logBtn = document.createElement('button');
   logBtn.className = 'btn btn-o'; logBtn.innerHTML = IC.history + ' 進貨紀錄';
@@ -2111,7 +2219,11 @@ PF.inventory = function() {
   const addBtn = document.createElement('button');
   addBtn.className = 'btn btn-p'; addBtn.innerHTML = IC.plus + ' 新增商品';
   addBtn.addEventListener('click', () => openProdModal(null));
+  const xlBtn = document.createElement('button');
+  xlBtn.className = 'btn btn-o'; xlBtn.innerHTML = '📥 匯出庫存 Excel';
+  xlBtn.addEventListener('click', exportInventoryExcel);
   ge('tb-act').innerHTML = '';
+  ge('tb-act').appendChild(xlBtn);
   ge('tb-act').appendChild(logBtn);
   ge('tb-act').appendChild(addBtn);
 
