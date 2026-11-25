@@ -1664,6 +1664,9 @@ function marginLabel(p) {
 
 function renderPosGrid() {
   const g = ge('pos-grid'); if (!g) return;
+  const rm = heldReserveMap();
+  // 有庫存（扣掉暫存保留後還能賣）的商品排前面，已售完的排到最後；同一組裡維持原本的商品排序
+  const isOut = p => Math.max(0, p.stock - productReserved(p, rm)) === 0;
   const list = products
     .filter(p => {
       const mc = posCat==='全部' || p.cat===posCat;
@@ -1671,8 +1674,7 @@ function renderPosGrid() {
       const q  = posSearch.toLowerCase();
       return mc && mo && (!q || p.name.toLowerCase().includes(q) || (p.barcode||'').toLowerCase().includes(q));
     })
-    .sort((a,b) => (a.sortOrder??999) - (b.sortOrder??999));
-  const rm = heldReserveMap();
+    .sort((a,b) => (isOut(a) - isOut(b)) || ((a.sortOrder??999) - (b.sortOrder??999)));
   g.innerHTML = list.map(p => {
     const rs = productReserved(p, rm), av = Math.max(0, p.stock - rs);
     return '<div class="pc' + (av===0?' out':'') + '" data-pid="' + p.id + '">' +
